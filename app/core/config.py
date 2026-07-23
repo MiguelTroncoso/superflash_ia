@@ -28,10 +28,16 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://superflash:changeme@localhost:5432/superflash"
 
-    # Adaptador de monitoreo activo. Cuando exista una fuente real se
-    # añadirá aquí su identificador (p. ej. "panel") sin tocar el resto.
-    monitoring_adapter: Literal["mock"] = "mock"
+    # Adaptador que alimenta la recolección: "mock" (combinado histórico)
+    # o "composite" (une las dos fuentes por tipo configuradas abajo).
+    monitoring_adapter: Literal["mock", "composite"] = "mock"
     mock_seed: int = 42
+
+    # Fuentes por tipo, usadas por "composite" y por el comando de
+    # diagnóstico. Las fuentes reales (prometheus, netdata, panel...) se
+    # registrarán como nuevos valores en app/adapters/factory.py.
+    infrastructure_source: Literal["mock"] = "mock"
+    streaming_source: Literal["mock"] = "mock"
 
     # Clave requerida por los endpoints internos (POST /api/v1/collection/run).
     # Sin clave configurada, esos endpoints se niegan a operar (fail-closed).

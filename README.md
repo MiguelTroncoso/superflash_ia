@@ -30,6 +30,12 @@ versión solo observa.
   fail-closed) y endpoint de estado (`/api/v1/collection/status`).
 - **Scheduler opcional** de recolección periódica (cada 5 minutos por
   defecto), deshabilitado salvo que se active explícitamente.
+- **Arquitectura multi-fuente**: contratos separados para métricas de
+  infraestructura (`InfrastructureMetricsAdapter`: CPU, RAM, disco, red,
+  load, uptime, estado) y de streaming (`StreamingMetricsAdapter`:
+  espectadores, bitrate, estado del canal), con mocks de demostración,
+  adaptador compuesto (`MONITORING_ADAPTER=composite`) y comando de
+  diagnóstico sin persistencia (`python -m app.tasks.diagnose_source`).
 - API de consulta: servidores, canales, históricos por rango de fechas y
   resumen agregado (`/api/v1/overview`).
 - Migraciones con Alembic y despliegue con Docker Compose.
@@ -179,6 +185,11 @@ curl http://localhost:8000/api/v1/collection/status
 
 # Vía CLI (mismo comportamiento, sin pasar por HTTP; --seed opcional)
 python -m app.tasks.collect --seed 42
+
+# Diagnóstico de fuentes: valida configuración y muestra qué datos
+# entregaría cada fuente, SIN escribir en la base de datos.
+python -m app.tasks.diagnose_source
+python -m app.tasks.diagnose_source --source infrastructure
 ```
 
 Respuesta típica:
@@ -239,7 +250,9 @@ constraint de unicidad en la base de datos.
 
 ## Próximos pasos
 
-1. Adaptador de la fuente real (solo lectura, credenciales por entorno).
+1. Adaptador de la fuente real (solo lectura, credenciales por entorno),
+   implementando los contratos de `app/adapters/sources.py`; opciones
+   evaluadas y recomendaciones en `docs/real-source-integration.md`.
 2. Lock distribuido y estado compartido para despliegues con réplicas.
 3. Autenticación para el resto de endpoints si salen de la red privada.
 4. Política de retención de métricas históricas.

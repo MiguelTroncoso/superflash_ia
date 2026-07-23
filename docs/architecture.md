@@ -174,20 +174,60 @@ la misma muestra, y los datos son coherentes entre sí (el output de un
 servidor es la suma del output estimado de sus canales; CPU y memoria
 crecen con la utilización de red).
 
+## Fuentes múltiples: contratos por tipo
+
+Las fuentes reales rara vez entregan todo junto: las métricas de máquina
+suelen venir de un sistema (Prometheus, Netdata, API del proveedor) y
+las de audiencia de otro (API del panel de streaming). Por eso existen
+dos contratos separados en `app/adapters/sources.py`:
+
+```mermaid
+flowchart LR
+    I[InfrastructureMetricsAdapter<br/>cpu, ram, disco, red,<br/>load, uptime, estado] --> C[CompositeMonitoringAdapter]
+    S[StreamingMetricsAdapter<br/>viewers, bitrate,<br/>estado de canal] --> C
+    C -->|MonitoringSourceAdapter| P[CollectionService<br/>sin cambios]
+    MI[MockInfrastructureAdapter] -.implementa.-> I
+    MS[MockStreamingAdapter] -.implementa.-> S
+```
+
+- `InfrastructureMetricsAdapter`: inventario de servidores +
+  `InfrastructureMetricSnapshot` (CPU, RAM, disco, tráfico de entrada y
+  salida, load average 1/5/15 min, uptime, estado del servidor).
+- `StreamingMetricsAdapter`: inventario de canales +
+  `StreamingChannelMetricSnapshot` (espectadores, bitrate estimado,
+  estado del canal).
+- `CompositeMonitoringAdapter` une ambas fuentes hacia el contrato
+  histórico: las conexiones y streams por servidor se derivan de la
+  muestra de streaming, y el output estimado por canal de
+  `viewers × bitrate`. Se activa con `MONITORING_ADAPTER=composite`
+  (el valor por defecto sigue siendo `mock`).
+
+Los mocks de demostración (`MockInfrastructureAdapter`,
+`MockStreamingAdapter`) envuelven `MockMonitoringAdapter` con la misma
+semilla: describen el mismo mundo simulado sin duplicar lógica ni
+cambiar el comportamiento del mock original. El esquema de base de datos
+no cambia todavía: los campos nuevos (disco, load, estado del servidor)
+viven solo en los snapshots hasta que una fuente real confirme qué
+entrega, y entonces se incorporarán con una migración.
+
+El comando `python -m app.tasks.diagnose_source` valida la configuración
+y muestra qué datos entregaría cada fuente **sin escribir en la base de
+datos ni realizar conexiones externas**.
+
 ## Cómo se añadirá la fuente real
 
-1. Nuevo módulo `app/adapters/panel.py` (nombre orientativo) que
-   implemente `MonitoringSourceAdapter` consumiendo la API del panel
-   real **en modo lectura**.
-2. Sus credenciales y URL llegarán por variables de entorno
-   (`PANEL_API_URL`, `PANEL_API_TOKEN`, …) declaradas en `Settings`;
-   nunca en el código ni en logs. La API pública de esta plataforma no
-   aceptará URLs arbitrarias: el destino se fija por configuración.
-3. Registro en `app/adapters/factory.py` bajo un nuevo valor de
-   `MONITORING_ADAPTER` (p. ej. `panel`).
-4. Nada más cambia: recolector, repositorios, API y tests de dominio son
-   agnósticos a la fuente. Se añadirán tests específicos del adaptador
-   con respuestas grabadas/mockeadas.
+El proceso completo (opciones evaluadas, tabla comparativa de seguridad
+y recomendaciones) está en `docs/real-source-integration.md`. En corto:
+
+1. Declarar las variables de entorno de la fuente en `Settings` (nunca
+   credenciales en el código; la API no acepta URLs arbitrarias).
+2. Implementar `InfrastructureMetricsAdapter` o
+   `StreamingMetricsAdapter` en `app/adapters/<fuente>.py`.
+3. Registrar el identificador en `factory.py` y en los `Literal` de
+   `Settings` (`INFRASTRUCTURE_SOURCE` / `STREAMING_SOURCE`).
+4. Validar con `diagnose_source`, probar con respuestas grabadas, correr
+   en sombra con `MONITORING_ADAPTER=composite` y solo entonces
+   promoverla. El recolector, los repositorios y la API no cambian.
 
 ## Preparación para recomendaciones futuras
 
