@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.adapters.base import ChannelSnapshot
@@ -75,8 +75,14 @@ class ChannelRepository:
         start: datetime | None = None,
         end: datetime | None = None,
         limit: int = 100,
+        before: tuple[datetime, int] | None = None,
     ) -> list[ChannelMetric]:
-        """Histórico de métricas de un canal, de más reciente a más antigua."""
+        """Histórico de un canal, de más reciente a más antigua.
+
+        ``before`` es la posición ``(collected_at, id)`` del cursor: solo
+        se devuelven muestras estrictamente anteriores en el orden
+        estable ``(collected_at DESC, id DESC)``.
+        """
         stmt: Select[tuple[ChannelMetric]] = select(ChannelMetric).where(
             ChannelMetric.channel_id == channel_id
         )
@@ -84,7 +90,17 @@ class ChannelRepository:
             stmt = stmt.where(ChannelMetric.collected_at >= start)
         if end is not None:
             stmt = stmt.where(ChannelMetric.collected_at <= end)
-        stmt = stmt.order_by(ChannelMetric.collected_at.desc()).limit(limit)
+        if before is not None:
+            before_at, before_id = before
+            stmt = stmt.where(
+                or_(
+                    ChannelMetric.collected_at < before_at,
+                    and_(ChannelMetric.collected_at == before_at, ChannelMetric.id < before_id),
+                )
+            )
+        stmt = stmt.order_by(ChannelMetric.collected_at.desc(), ChannelMetric.id.desc()).limit(
+            limit
+        )
         return list(self._session.scalars(stmt))
 
     def top_channels_by_latest_viewers(self, limit: int = 5) -> list[tuple[Channel, ChannelMetric]]:

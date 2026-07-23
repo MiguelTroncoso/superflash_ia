@@ -38,22 +38,37 @@ flowchart LR
 
 ### Exclusión mutua y estado observable
 
-Las recolecciones disparadas por HTTP y por el scheduler pasan por un
-único `CollectionRunner` por proceso (`app/collectors/runner.py`):
+Las recolecciones disparadas por HTTP, por CLI y por el scheduler pasan
+por un único `CollectionRunner` por proceso (`app/collectors/runner.py`),
+con exclusión mutua en dos niveles:
 
-- Un lock no bloqueante garantiza que **nunca** corren dos recolecciones
-  a la vez: la segunda petición HTTP recibe `409` y el ciclo del
-  scheduler que coincide con una ejecución manual se omite con un aviso
-  en el log.
-- El runner registra la última ejecución (inicio, fin, duración,
-  resultado o error), que `GET /api/v1/collection/status` expone junto
-  con el estado del scheduler (`enabled`, `interval_seconds`,
-  `next_run_at`).
+1. **Lock de hilo** no bloqueante: impide dos recolecciones en el mismo
+   proceso (segunda petición HTTP → `409`; ciclo del scheduler que
+   coincide → se omite con aviso en el log).
+2. **Advisory lock de PostgreSQL** (`app/collectors/lock.py`,
+   `pg_try_advisory_lock` con clave fija sobre una conexión dedicada):
+   impide recolecciones simultáneas entre instancias distintas. Si el
+   proceso muere, la conexión se cierra y PostgreSQL libera el lock
+   automáticamente. Fuera de PostgreSQL (SQLite en tests) este nivel es
+   un no-op y basta el lock de hilo.
 
-Este lock y este estado viven en memoria del proceso: son correctos para
-un despliegue de una sola instancia (el actual). Para réplicas múltiples
-el plan es sustituirlos por un lock a nivel de PostgreSQL
-(`pg_advisory_lock`) y persistir el historial de ejecuciones.
+El historial de ejecuciones se **persiste** en `collection_runs`: cada
+pasada inserta su fila al empezar (estado `running`) y la completa al
+terminar (fin, `duration_ms`, contadores, errores, origen
+manual/scheduler). `GET /api/v1/collection/status` lee de ahí: el
+`last_run` sobrevive a reinicios y refleja recolecciones de cualquier
+instancia; una fila `running` fresca de otra instancia se reporta como
+en ejecución, y las huérfanas (> 30 minutos) se ignoran.
+
+### Snapshot compuesto por ciclo
+
+`CompositeMonitoringAdapter` captura, al primer acceso de cada pasada,
+un `CompositeCycleSnapshot` inmutable con las cuatro colecciones
+(servidores, canales y ambas muestras). Cada fuente se consulta **una
+sola vez por ciclo** y servidores y canales se derivan de la misma
+muestra: consistencia temporal garantizada dentro de la pasada.
+`CollectionService` marca el inicio de ciclo con
+`begin_collection_cycle()` (no-op en los adaptadores sin cache).
 
 ### Programador periódico
 
@@ -68,14 +83,28 @@ dentro del proceso de la API, gestionado por el *lifespan* de FastAPI:
 - Ejecuta la recolección en un hilo (`asyncio.to_thread`) para no
   bloquear el event loop de la API.
 
-### Autenticación del endpoint interno
+### Autenticación
 
-`POST /api/v1/collection/run` exige la cabecera `X-API-Key` comparada en
-tiempo constante (`secrets.compare_digest`) contra `COLLECTION_API_KEY`.
-La política es *fail-closed*: sin clave configurada el endpoint responde
-`503` en vez de quedar abierto. La clave solo existe como variable de
-entorno; nunca se versiona ni se escribe en logs. Los endpoints GET de
-consulta permanecen abiertos por diseño (despliegue en red privada).
+Toda la API `/api/v1` exige la cabecera `X-API-Key`, comparada en tiempo
+constante (`secrets.compare_digest`) contra `API_KEY` (alias histórico:
+`COLLECTION_API_KEY`). La política es *fail-closed*: sin clave
+configurada la API responde `503` en vez de quedar abierta. Solo
+`/health` es público, para orquestadores y healthchecks. La clave existe
+únicamente como variable de entorno; nunca se versiona ni se escribe en
+logs.
+
+### Retención y alertas
+
+- **Retención** (`app/services/retention_service.py` +
+  `python -m app.tasks.prune_metrics`): borra métricas y ejecuciones
+  anteriores a `METRICS_RETENTION_DAYS` días. Deshabilitada por defecto;
+  el comando se niega a operar sin configuración explícita y ofrece
+  `--dry-run`. Solo toca la base propia de la plataforma.
+- **Alertas** (`app/services/alert_service.py`, `GET /api/v1/alerts`):
+  evaluación bajo demanda de la última muestra de cada servidor
+  habilitado contra umbrales configurables (CPU, RAM, disco, utilización
+  de red, obsolescencia de muestras). Sin persistencia ni notificaciones
+  externas; los datos ausentes nunca generan falsas alertas.
 
 ## Responsabilidad de cada capa
 

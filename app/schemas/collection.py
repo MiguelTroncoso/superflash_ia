@@ -1,8 +1,10 @@
-"""Esquemas del resultado y el estado de la recolección."""
+"""Esquemas del resultado, historial y estado de la recolección."""
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.models.collection_run import CollectionRunStatus, CollectionTrigger
 
 
 class CollectionResult(BaseModel):
@@ -20,15 +22,25 @@ class CollectionResult(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
-class CollectionLastRun(BaseModel):
-    """Detalle de la última recolección terminada en este proceso."""
+class CollectionRunRead(BaseModel):
+    """Ejecución de recolección persistida en ``collection_runs``."""
 
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
     started_at: datetime
-    finished_at: datetime
-    duration_seconds: float
-    success: bool
-    error: str | None = None
-    result: CollectionResult | None = None
+    finished_at: datetime | None
+    duration_ms: int | None
+    source: str
+    status: CollectionRunStatus
+    triggered_by: CollectionTrigger
+    servers_synced: int
+    channels_synced: int
+    server_metrics_inserted: int
+    server_metrics_skipped: int
+    channel_metrics_inserted: int
+    channel_metrics_skipped: int
+    errors: list[str]
 
 
 class SchedulerStatus(BaseModel):
@@ -40,9 +52,13 @@ class SchedulerStatus(BaseModel):
 
 
 class CollectionStatusRead(BaseModel):
-    """Estado observable del subsistema de recolección."""
+    """Estado observable del subsistema de recolección.
+
+    ``last_run`` proviene del historial persistido, por lo que es visible
+    desde cualquier instancia y sobrevive a reinicios del proceso.
+    """
 
     running: bool
     current_run_started_at: datetime | None = None
-    last_run: CollectionLastRun | None = None
+    last_run: CollectionRunRead | None = None
     scheduler: SchedulerStatus

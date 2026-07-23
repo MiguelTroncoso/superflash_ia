@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 from app.adapters.mock import MockMonitoringAdapter
 from app.collectors.runner import CollectionRunner
-from app.models import ServerMetric
+from app.models import CollectionRun, CollectionRunStatus, CollectionTrigger, ServerMetric
 from app.tasks.scheduler import CollectionScheduler
 
 
@@ -19,16 +19,31 @@ def _make_scheduler(session_factory, runner, interval=0.05):
     )
 
 
-def test_scheduler_collects_periodically(session_factory, session):
-    """Con el scheduler activo se persisten métricas sin intervención manual."""
+def _successful_runs(session_factory):
+    session = session_factory()
+    try:
+        return (
+            session.scalar(
+                select(func.count())
+                .select_from(CollectionRun)
+                .where(CollectionRun.status == CollectionRunStatus.SUCCESS)
+            )
+            or 0
+        )
+    finally:
+        session.close()
+
+
+def test_scheduler_collects_periodically(file_session_factory):
+    """Con el scheduler activo se persisten métricas e historial solos."""
     runner = CollectionRunner()
-    scheduler = _make_scheduler(session_factory, runner)
+    scheduler = _make_scheduler(file_session_factory, runner)
 
     async def scenario():
         scheduler.start()
         assert scheduler.is_active
         for _ in range(200):
-            if runner.last_run is not None:
+            if _successful_runs(file_session_factory) >= 1:
                 break
             await asyncio.sleep(0.02)
         await scheduler.stop()
@@ -37,10 +52,17 @@ def test_scheduler_collects_periodically(session_factory, session):
 
     assert not scheduler.is_active
     assert scheduler.next_run_at is None
-    assert runner.last_run is not None
-    assert runner.last_run.success
-    stored = session.scalar(select(func.count()).select_from(ServerMetric))
-    assert stored >= 4
+    session = file_session_factory()
+    try:
+        run = session.scalars(
+            select(CollectionRun).where(CollectionRun.status == CollectionRunStatus.SUCCESS)
+        ).first()
+        assert run is not None
+        assert run.triggered_by is CollectionTrigger.SCHEDULER
+        stored = session.scalar(select(func.count()).select_from(ServerMetric))
+        assert stored >= 4
+    finally:
+        session.close()
 
 
 def test_scheduler_start_is_idempotent(session_factory):

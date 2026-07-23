@@ -27,10 +27,24 @@ def test_scheduler_disabled_by_default(monkeypatch):
     assert settings.collection_interval_seconds == 300
 
 
-def test_collection_api_key_unset_by_default(monkeypatch):
-    """Sin variable de entorno no existe clave (el endpoint queda fail-closed)."""
+def test_api_key_unset_by_default(monkeypatch):
+    """Sin variable de entorno no existe clave (la API queda fail-closed)."""
+    monkeypatch.delenv("API_KEY", raising=False)
     monkeypatch.delenv("COLLECTION_API_KEY", raising=False)
-    assert Settings(_env_file=None).collection_api_key is None
+    assert Settings(_env_file=None).api_key is None
+
+
+def test_api_key_accepts_legacy_env_name(monkeypatch):
+    """El nombre histórico COLLECTION_API_KEY sigue funcionando como alias."""
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.setenv("COLLECTION_API_KEY", "clave-legada")
+    assert Settings(_env_file=None).api_key == "clave-legada"
+
+
+def test_retention_disabled_by_default(monkeypatch):
+    """La retención jamás se activa sin configuración explícita."""
+    monkeypatch.delenv("METRICS_RETENTION_DAYS", raising=False)
+    assert Settings(_env_file=None).metrics_retention_days is None
 
 
 def test_interval_minimum_enforced():

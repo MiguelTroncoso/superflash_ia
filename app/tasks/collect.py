@@ -14,10 +14,11 @@ import sys
 
 from app.adapters.factory import get_adapter
 from app.adapters.mock import MockMonitoringAdapter
-from app.collectors.collection import CollectionService
+from app.collectors.runner import CollectionAlreadyRunningError, get_collection_runner
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.database.session import get_session_factory
+from app.models.collection_run import CollectionTrigger
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,12 @@ def main(argv: list[str] | None = None) -> int:
 
     session = get_session_factory()()
     try:
-        result = CollectionService(session, adapter).run()
+        result = get_collection_runner().run(
+            session, adapter, triggered_by=CollectionTrigger.MANUAL
+        )
+    except CollectionAlreadyRunningError:
+        logger.error("ya hay una recolección en curso; no se inició otra")
+        return 1
     finally:
         session.close()
 

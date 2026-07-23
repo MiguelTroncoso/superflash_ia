@@ -52,10 +52,11 @@ services:
       STREAMING_SOURCE: ${STREAMING_SOURCE:-mock}
       MOCK_SEED: ${MOCK_SEED:-42}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
-      # Sin valor, POST /api/v1/collection/run queda fail-closed (503).
-      COLLECTION_API_KEY: ${COLLECTION_API_KEY:-}
+      # Sin valor, toda la API /api/v1 queda fail-closed (503).
+      API_KEY: ${API_KEY:-}
       SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-false}
       COLLECTION_INTERVAL_SECONDS: ${COLLECTION_INTERVAL_SECONDS:-300}
+      METRICS_RETENTION_DAYS: ${METRICS_RETENTION_DAYS:-}
     depends_on:
       db:
         condition: service_healthy

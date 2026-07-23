@@ -33,6 +33,8 @@ class ServerMetricSnapshot(BaseModel):
     collected_at: datetime
     cpu_percent: float = Field(ge=0, le=100)
     memory_percent: float = Field(ge=0, le=100)
+    # Opcional: solo las fuentes de infraestructura granulares lo entregan.
+    disk_percent: float | None = Field(default=None, ge=0, le=100)
     input_mbps: float = Field(ge=0)
     output_mbps: float = Field(ge=0)
     active_connections: int = Field(ge=0)
@@ -89,3 +91,12 @@ class MonitoringSourceAdapter(ABC):
     @abstractmethod
     def get_channel_metrics(self) -> list[ChannelMetricSnapshot]:
         """Devuelve una muestra de métricas por canal."""
+
+    def begin_collection_cycle(self) -> None:
+        """Señala el inicio de una pasada de recolección.
+
+        Los adaptadores que cachean una muestra por ciclo (p. ej. el
+        compuesto) la invalidan aquí para garantizar datos frescos y
+        consistentes dentro de la pasada. Por defecto no hace nada.
+        """
+        return None

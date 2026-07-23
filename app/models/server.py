@@ -77,6 +77,8 @@ class ServerMetric(Base):
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     cpu_percent: Mapped[float] = mapped_column(Float)
     memory_percent: Mapped[float] = mapped_column(Float)
+    # Solo lo entregan fuentes de infraestructura granulares (composite).
+    disk_percent: Mapped[float | None] = mapped_column(Float)
     input_mbps: Mapped[float] = mapped_column(Float)
     output_mbps: Mapped[float] = mapped_column(Float)
     active_connections: Mapped[int] = mapped_column(Integer)

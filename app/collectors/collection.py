@@ -43,6 +43,10 @@ class CollectionService:
         """
         result = CollectionResult(adapter=self._adapter.source_name, collected_at=datetime.now(UTC))
 
+        # Un ciclo nuevo: los adaptadores que cachean su muestra la refrescan
+        # aquí y la reutilizan en las cuatro lecturas de esta pasada.
+        self._adapter.begin_collection_cycle()
+
         server_ids = self._sync_servers(result)
         self._sync_channels(result, server_ids)
         self._store_server_metrics(result, server_ids)
@@ -120,6 +124,7 @@ class CollectionService:
                             collected_at=metric.collected_at,
                             cpu_percent=metric.cpu_percent,
                             memory_percent=metric.memory_percent,
+                            disk_percent=metric.disk_percent,
                             input_mbps=metric.input_mbps,
                             output_mbps=metric.output_mbps,
                             active_connections=metric.active_connections,

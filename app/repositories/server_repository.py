@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.adapters.base import ServerSnapshot
@@ -62,8 +62,14 @@ class ServerRepository:
         start: datetime | None = None,
         end: datetime | None = None,
         limit: int = 100,
+        before: tuple[datetime, int] | None = None,
     ) -> list[ServerMetric]:
-        """Histórico de métricas de un servidor, de más reciente a más antigua."""
+        """Histórico de un servidor, de más reciente a más antigua.
+
+        ``before`` es la posición ``(collected_at, id)`` del cursor: solo
+        se devuelven muestras estrictamente anteriores en el orden
+        estable ``(collected_at DESC, id DESC)``.
+        """
         stmt: Select[tuple[ServerMetric]] = select(ServerMetric).where(
             ServerMetric.server_id == server_id
         )
@@ -71,7 +77,15 @@ class ServerRepository:
             stmt = stmt.where(ServerMetric.collected_at >= start)
         if end is not None:
             stmt = stmt.where(ServerMetric.collected_at <= end)
-        stmt = stmt.order_by(ServerMetric.collected_at.desc()).limit(limit)
+        if before is not None:
+            before_at, before_id = before
+            stmt = stmt.where(
+                or_(
+                    ServerMetric.collected_at < before_at,
+                    and_(ServerMetric.collected_at == before_at, ServerMetric.id < before_id),
+                )
+            )
+        stmt = stmt.order_by(ServerMetric.collected_at.desc(), ServerMetric.id.desc()).limit(limit)
         return list(self._session.scalars(stmt))
 
     def latest_metrics_for_enabled(self) -> list[tuple[Server, ServerMetric]]:

@@ -4,15 +4,16 @@ Verifica, en orden:
 
 1. Ciclo completo de migraciones: upgrade head → downgrade base → upgrade head.
 2. Arranque de la API con uvicorn.
-3. /health con base de datos conectada.
-4. Autenticación del endpoint interno (sin clave y con clave incorrecta → 401).
+3. /health público con base de datos conectada.
+4. Autenticación global de /api/v1 (sin clave o clave incorrecta → 401).
 5. Recolección mock: inserta datos; repetida en el mismo minuto: deduplica.
 6. Overview coherente y endpoints históricos.
-7. Estado del recolector (última ejecución, scheduler apagado).
+7. Estado del recolector desde el historial persistido.
+8. Alertas internas disponibles.
 
 Uso::
 
-    DATABASE_URL=postgresql+psycopg://... COLLECTION_API_KEY=una-clave \
+    DATABASE_URL=postgresql+psycopg://... API_KEY=una-clave \
         python scripts/smoke_test.py
 
 Solo usa la biblioteca estándar; pensado para CI (GitHub Actions con un
@@ -71,10 +72,11 @@ def wait_for_health() -> None:
 
 
 def main() -> int:
-    api_key = os.environ.get("COLLECTION_API_KEY")
+    api_key = os.environ.get("API_KEY") or os.environ.get("COLLECTION_API_KEY")
     if not os.environ.get("DATABASE_URL") or not api_key:
-        print("Define DATABASE_URL y COLLECTION_API_KEY antes de ejecutar el smoke test.")
+        print("Define DATABASE_URL y API_KEY antes de ejecutar el smoke test.")
         return 2
+    auth = {"X-API-Key": api_key}
 
     # 1. Ciclo de migraciones en ambos sentidos.
     run_step("migraciones: upgrade", [sys.executable, "-m", "alembic", "upgrade", "head"])
@@ -98,23 +100,25 @@ def main() -> int:
         wait_for_health()
 
         status, health = request("GET", "/health")
-        check(status == 200 and health["database"] == "ok", "/health reporta base de datos ok")
+        check(status == 200 and health["database"] == "ok", "/health público con base de datos ok")
 
-        # 3. Autenticación del endpoint interno.
+        # 3. Autenticación global de /api/v1.
         status, _ = request("POST", "/api/v1/collection/run")
         check(status == 401, "recolección sin clave rechazada (401)")
         status, _ = request("POST", "/api/v1/collection/run", {"X-API-Key": "clave-incorrecta"})
         check(status == 401, "recolección con clave incorrecta rechazada (401)")
+        status, _ = request("GET", "/api/v1/servers")
+        check(status == 401, "GET de consulta sin clave rechazado (401)")
 
         # 4. Recolección real + deduplicación.
-        status, first = request("POST", "/api/v1/collection/run", {"X-API-Key": api_key})
+        status, first = request("POST", "/api/v1/collection/run", auth)
         check(status == 200, "recolección con clave válida aceptada")
         check(first["servers_synced"] >= 4, "se sincronizaron al menos 4 servidores")
         check(first["channels_synced"] >= 20, "se sincronizaron al menos 20 canales")
         check(first["server_metrics_inserted"] >= 4, "se insertaron métricas de servidores")
         check(first["errors"] == [], "recolección sin errores")
 
-        status, second = request("POST", "/api/v1/collection/run", {"X-API-Key": api_key})
+        status, second = request("POST", "/api/v1/collection/run", auth)
         check(status == 200, "segunda recolección aceptada")
         check(
             second["server_metrics_inserted"] == 0 and second["server_metrics_skipped"] >= 4,
@@ -122,14 +126,14 @@ def main() -> int:
         )
 
         # 5. Endpoints de consulta.
-        status, servers = request("GET", "/api/v1/servers")
+        status, servers = request("GET", "/api/v1/servers", auth)
         check(status == 200 and len(servers) >= 4, "listado de servidores disponible")
 
         server_id = servers[0]["id"]
-        status, metrics = request("GET", f"/api/v1/servers/{server_id}/metrics?limit=1")
+        status, metrics = request("GET", f"/api/v1/servers/{server_id}/metrics?limit=1", auth)
         check(status == 200 and len(metrics) == 1, "histórico de métricas consultable")
 
-        status, overview = request("GET", "/api/v1/overview")
+        status, overview = request("GET", "/api/v1/overview", auth)
         check(status == 200, "overview disponible")
         check(overview["enabled_servers"] >= 4, "overview: servidores habilitados")
         check(overview["total_output_mbps"] > 0, "overview: output total positivo")
@@ -143,13 +147,20 @@ def main() -> int:
             "overview: utilización de red calculada para todos los servidores mock",
         )
 
-        # 6. Estado del recolector.
-        status, cstatus = request("GET", "/api/v1/collection/status")
+        # 6. Estado del recolector (historial persistido).
+        status, cstatus = request("GET", "/api/v1/collection/status", auth)
         check(status == 200, "status de recolección disponible")
         check(cstatus["running"] is False, "status: sin recolección en curso")
-        check(cstatus["last_run"]["success"] is True, "status: última ejecución exitosa")
-        check(cstatus["last_run"]["duration_seconds"] >= 0, "status: duración registrada")
+        check(cstatus["last_run"]["status"] == "success", "status: última ejecución exitosa")
+        check(cstatus["last_run"]["triggered_by"] == "manual", "status: disparo manual registrado")
+        check(cstatus["last_run"]["duration_ms"] >= 0, "status: duración registrada")
         check(cstatus["scheduler"]["enabled"] is False, "status: scheduler apagado por defecto")
+
+        # 7. Alertas internas.
+        status, alerts = request("GET", "/api/v1/alerts", auth)
+        check(status == 200, "alertas disponibles")
+        check("generated_at" in alerts, "alertas: marca de tiempo presente")
+        check(isinstance(alerts["alerts"], list), "alertas: lista evaluada")
 
         print("\nSMOKE TEST COMPLETO: todas las verificaciones pasaron.")
         return 0

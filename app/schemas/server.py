@@ -33,6 +33,7 @@ class ServerMetricRead(BaseModel):
     collected_at: datetime
     cpu_percent: float
     memory_percent: float
+    disk_percent: float | None
     input_mbps: float
     output_mbps: float
     active_connections: int

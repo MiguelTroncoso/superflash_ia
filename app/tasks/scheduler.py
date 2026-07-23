@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.adapters.base import MonitoringSourceAdapter
 from app.collectors.runner import CollectionAlreadyRunningError, CollectionRunner
+from app.models.collection_run import CollectionTrigger
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,9 @@ class CollectionScheduler:
         """Una pasada de recolección; nunca propaga excepciones al bucle."""
         session = self._session_factory()
         try:
-            self._runner.run(session, self._adapter_factory())
+            self._runner.run(
+                session, self._adapter_factory(), triggered_by=CollectionTrigger.SCHEDULER
+            )
         except CollectionAlreadyRunningError:
             logger.warning("scheduler: ciclo omitido, ya hay una recolección en curso")
         except Exception:

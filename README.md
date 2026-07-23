@@ -24,10 +24,23 @@ versión solo observa.
   5 servidores con capacidades distintas y 24 canales con audiencias
   variadas y coherentes.
 - Recolección manual (endpoint interno y comando CLI) con deduplicación
-  de muestras, aislamiento de errores por elemento y **exclusión mutua**:
-  nunca corren dos recolecciones a la vez en el mismo proceso.
-- Endpoint interno protegido por **API key** (`COLLECTION_API_KEY`,
-  fail-closed) y endpoint de estado (`/api/v1/collection/status`).
+  de muestras, aislamiento de errores por elemento y **exclusión mutua en
+  dos niveles**: lock de hilo en el proceso y **advisory lock de
+  PostgreSQL** entre instancias (con fallback en memoria para
+  SQLite/tests).
+- **Historial persistido** de ejecuciones (`collection_runs`: inicio,
+  fin, duración, origen manual/scheduler, contadores y errores);
+  `/api/v1/collection/status` lo lee de la base, por lo que sobrevive a
+  reinicios y es visible desde cualquier instancia.
+- **API key global**: todos los endpoints `/api/v1` exigen `X-API-Key`
+  (`API_KEY`, fail-closed); solo `/health` es público.
+- **Paginación por cursor** en los históricos (cabecera `X-Next-Cursor`),
+  compatible con los clientes que solo usan `limit`.
+- **Retención configurable** del histórico propio, deshabilitada por
+  defecto (`METRICS_RETENTION_DAYS` + `python -m app.tasks.prune_metrics`).
+- **Alertas internas de solo lectura** (`GET /api/v1/alerts`): CPU, RAM,
+  disco, utilización de red y servidores sin muestra reciente; sin
+  notificaciones externas.
 - **Scheduler opcional** de recolección periódica (cada 5 minutos por
   defecto), deshabilitado salvo que se active explícitamente.
 - **Arquitectura multi-fuente**: contratos separados para métricas de
@@ -147,18 +160,50 @@ overview y el endpoint de estado.
 | GET  | `/api/v1/servers/{id}` | Detalle de un servidor |
 | GET  | `/api/v1/servers/{id}/metrics` | Histórico (`start`, `end`, `limit`) |
 | GET  | `/api/v1/channels` | Canales (filtros `server_id`, `category`, `enabled`) |
-| GET  | `/api/v1/channels/{id}/metrics` | Histórico del canal (`start`, `end`, `limit`) |
-| POST | `/api/v1/collection/run` | **Interno, requiere API key**: ejecuta una recolección |
-| GET  | `/api/v1/collection/status` | Estado del recolector y del scheduler |
+| GET  | `/api/v1/channels/{id}/metrics` | Histórico del canal (`start`, `end`, `limit`, `cursor`) |
+| POST | `/api/v1/collection/run` | Ejecuta una recolección (409 si ya hay una en curso) |
+| GET  | `/api/v1/collection/status` | Estado persistido del recolector y del scheduler |
+| GET  | `/api/v1/alerts` | Alertas internas según las últimas muestras |
 | GET  | `/api/v1/overview` | Estadísticas agregadas actuales |
 
-### Autenticación del endpoint interno
+### Autenticación
 
-`POST /api/v1/collection/run` exige la cabecera `X-API-Key` con el valor
-de `COLLECTION_API_KEY` (solo variable de entorno, nunca en el código).
-La política es *fail-closed*: si la variable no está configurada, el
-endpoint responde `503` en lugar de quedar abierto. Clave ausente o
-incorrecta → `401`. Si ya hay una recolección en curso → `409`.
+**Todos** los endpoints `/api/v1` exigen la cabecera `X-API-Key` con el
+valor de `API_KEY` (solo variable de entorno, nunca en el código; se
+acepta el nombre histórico `COLLECTION_API_KEY` como alias). `/health`
+permanece público para orquestadores. La política es *fail-closed*: sin
+la variable configurada, la API responde `503` en lugar de quedar
+abierta. Clave ausente o incorrecta → `401`.
+
+### Paginación por cursor
+
+Los históricos (`/servers/{id}/metrics`, `/channels/{id}/metrics`)
+aceptan `cursor` y devuelven, cuando hay más resultados, la cabecera
+`X-Next-Cursor` con el cursor opaco de la página siguiente. El cuerpo
+sigue siendo la lista de siempre: los clientes que solo usan `limit`
+funcionan sin cambios. Un cursor malformado responde `400`.
+
+### Retención del histórico
+
+Deshabilitada por defecto. Con `METRICS_RETENTION_DAYS` configurado:
+
+```bash
+python -m app.tasks.prune_metrics --dry-run  # cuenta sin borrar
+python -m app.tasks.prune_metrics            # borra lo anterior al corte
+```
+
+Sin esa variable el comando se niega a borrar y termina con código 2.
+Solo afecta a la base propia de la plataforma (métricas y ejecuciones);
+jamás toca infraestructura externa.
+
+### Alertas internas
+
+`GET /api/v1/alerts` evalúa bajo demanda la última muestra de cada
+servidor habilitado contra los umbrales configurables (`ALERT_*`):
+CPU alta, RAM alta, disco alto, utilización de red alta y servidor sin
+muestra reciente. No se persiste nada ni se envían notificaciones
+externas; los datos ausentes (disco desconocido, capacidad 0) nunca
+generan falsas alertas.
 
 ### Recolección automática (scheduler)
 
@@ -176,12 +221,15 @@ distribuido (ver `docs/architecture.md`).
 ## Ejemplo de recolección
 
 ```bash
-# Vía API (requiere la clave configurada en COLLECTION_API_KEY)
-curl -X POST -H "X-API-Key: $COLLECTION_API_KEY" \
+# Vía API (toda la v1 requiere la clave configurada en API_KEY)
+curl -X POST -H "X-API-Key: $API_KEY" \
     http://localhost:8000/api/v1/collection/run
 
-# Estado del recolector
-curl http://localhost:8000/api/v1/collection/status
+# Estado del recolector (historial persistido)
+curl -H "X-API-Key: $API_KEY" http://localhost:8000/api/v1/collection/status
+
+# Alertas internas
+curl -H "X-API-Key: $API_KEY" http://localhost:8000/api/v1/alerts
 
 # Vía CLI (mismo comportamiento, sin pasar por HTTP; --seed opcional)
 python -m app.tasks.collect --seed 42
@@ -223,12 +271,20 @@ constraint de unicidad en la base de datos.
   `(server_id, collected_at)` / `(channel_id, collected_at)`.
 - **Savepoints por elemento en la recolección**: un servidor o canal que
   falla se registra y no aborta el resto de la pasada.
-- **Runner con lock de proceso**: el endpoint manual y el scheduler pasan
-  por el mismo `CollectionRunner`; la segunda recolección simultánea se
-  rechaza (409) o se omite, nunca se ejecuta en paralelo.
-- **API key fail-closed**: sin `COLLECTION_API_KEY` el endpoint interno
-  responde 503; la comparación usa `secrets.compare_digest` y la clave
-  jamás se loguea.
+- **Exclusión mutua en dos niveles**: lock de hilo (mismo proceso) +
+  advisory lock de PostgreSQL sobre una conexión dedicada (entre
+  instancias; si el proceso muere, PostgreSQL libera el lock solo). En
+  SQLite el nivel distribuido es un no-op y basta el lock de hilo.
+- **Historial en `collection_runs`**: cada pasada se inserta al empezar
+  (estado `running`) y se completa al terminar; el status se lee de la
+  base y las filas `running` huérfanas (> 30 min) se ignoran.
+- **API key fail-closed global**: sin `API_KEY` toda la v1 responde 503;
+  la comparación usa `secrets.compare_digest` y la clave jamás se loguea.
+- **Snapshot compuesto por ciclo**: en modo `composite`, cada fuente se
+  consulta una sola vez por pasada y servidores/canales comparten la
+  misma muestra (consistencia temporal garantizada).
+- **Cursor en cabecera**: `X-Next-Cursor` mantiene el cuerpo de las
+  respuestas históricas sin cambios durante la transición.
 - **Migraciones en contenedor one-shot**: una sola ejecución de
   `alembic upgrade` por despliegue, sin carreras entre réplicas.
 - **Esquema portable (PostgreSQL/SQLite)**: los tests corren contra
@@ -239,22 +295,20 @@ constraint de unicidad en la base de datos.
 ## Limitaciones actuales
 
 - Solo datos simulados: no existe todavía adaptador para el panel real.
-- El lock de recolección y el estado de `/collection/status` viven en
-  memoria del proceso: válidos para **una** instancia de la API. Con
-  réplicas se necesitará un lock distribuido (p. ej. `pg_advisory_lock`).
-- El scheduler es in-process y de instancia única.
-- Los endpoints de consulta (GET) no requieren autenticación: pensados
-  para red privada.
-- Sin paginación por cursor en históricos (solo `limit` + rango).
-- Sin retención/compactación de métricas antiguas.
+- El scheduler sigue siendo in-process: con varias réplicas conviene
+  activarlo en una sola (el advisory lock impide duplicar recolecciones
+  en cualquier caso, pero los ciclos extra se desperdician).
+- Una única API key compartida (sin usuarios ni roles).
+- La limpieza de retención es manual (comando); no hay tarea programada.
+- Las alertas se evalúan bajo demanda; no hay notificaciones externas ni
+  historial de alertas.
 
 ## Próximos pasos
 
 1. Adaptador de la fuente real (solo lectura, credenciales por entorno),
    implementando los contratos de `app/adapters/sources.py`; opciones
    evaluadas y recomendaciones en `docs/real-source-integration.md`.
-2. Lock distribuido y estado compartido para despliegues con réplicas.
-3. Autenticación para el resto de endpoints si salen de la red privada.
-4. Política de retención de métricas históricas.
-5. Motor de recomendaciones de distribución de canales (solo sugerencias,
+2. Programación opcional de la limpieza de retención.
+3. Historial y silenciamiento de alertas; notificaciones opcionales.
+4. Motor de recomendaciones de distribución de canales (solo sugerencias,
    nunca acciones automáticas).

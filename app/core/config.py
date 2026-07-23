@@ -8,7 +8,7 @@ versionan en el repositorio.
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -39,13 +39,27 @@ class Settings(BaseSettings):
     infrastructure_source: Literal["mock"] = "mock"
     streaming_source: Literal["mock"] = "mock"
 
-    # Clave requerida por los endpoints internos (POST /api/v1/collection/run).
-    # Sin clave configurada, esos endpoints se niegan a operar (fail-closed).
-    collection_api_key: str | None = None
+    # Clave requerida por TODOS los endpoints /api/v1 (cabecera X-API-Key).
+    # Sin clave configurada, la API se niega a operar (fail-closed).
+    # Se acepta el nombre histórico COLLECTION_API_KEY como alias.
+    api_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("api_key", "collection_api_key")
+    )
 
     # Programador de recolección periódica. Deshabilitado por defecto.
     scheduler_enabled: bool = False
     collection_interval_seconds: int = Field(default=300, ge=5)
+
+    # Retención de histórico (métricas y ejecuciones). None = deshabilitada;
+    # la limpieza jamás corre sin este valor configurado explícitamente.
+    metrics_retention_days: int | None = Field(default=None, ge=1)
+
+    # Umbrales de las alertas internas de solo lectura (GET /api/v1/alerts).
+    alert_cpu_percent: float = Field(default=90.0, gt=0, le=100)
+    alert_memory_percent: float = Field(default=90.0, gt=0, le=100)
+    alert_disk_percent: float = Field(default=90.0, gt=0, le=100)
+    alert_network_utilization_percent: float = Field(default=85.0, gt=0)
+    alert_stale_minutes: int = Field(default=15, ge=1)
 
     # Lista de orígenes CORS permitidos. Vacía = middleware CORS apagado.
     # NoDecode evita que pydantic-settings intente decodificar la variable
