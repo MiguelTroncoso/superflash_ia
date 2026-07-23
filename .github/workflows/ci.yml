@@ -22,7 +22,7 @@ jobs:
       - name: Ruff (formato)
         run: ruff format --check .
       - name: MyPy
-        run: mypy app
+        run: mypy app scripts
       - name: Pytest
         run: pytest
 

@@ -36,11 +36,13 @@ class CollectionScheduler:
         session_factory: sessionmaker[Session],
         adapter_factory: Callable[[], MonitoringSourceAdapter],
         runner: CollectionRunner,
+        collection_timeout_seconds: float = 600.0,
     ) -> None:
         self._interval = interval_seconds
         self._session_factory = session_factory
         self._adapter_factory = adapter_factory
         self._runner = runner
+        self._collection_timeout_seconds = collection_timeout_seconds
         self._task: asyncio.Task[None] | None = None
         self._next_run_at: datetime | None = None
 
@@ -92,7 +94,10 @@ class CollectionScheduler:
         session = self._session_factory()
         try:
             self._runner.run(
-                session, self._adapter_factory(), triggered_by=CollectionTrigger.SCHEDULER
+                session,
+                self._adapter_factory(),
+                triggered_by=CollectionTrigger.SCHEDULER,
+                timeout_seconds=self._collection_timeout_seconds,
             )
         except CollectionAlreadyRunningError:
             logger.warning("scheduler: ciclo omitido, ya hay una recolección en curso")

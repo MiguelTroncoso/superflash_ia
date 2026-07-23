@@ -44,7 +44,10 @@ def main(argv: list[str] | None = None) -> int:
     session = get_session_factory()()
     try:
         result = get_collection_runner().run(
-            session, adapter, triggered_by=CollectionTrigger.MANUAL
+            session,
+            adapter,
+            triggered_by=CollectionTrigger.MANUAL,
+            timeout_seconds=settings.collection_timeout_seconds,
         )
     except CollectionAlreadyRunningError:
         logger.error("ya hay una recolección en curso; no se inició otra")

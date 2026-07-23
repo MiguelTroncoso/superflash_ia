@@ -2,6 +2,12 @@
 .env
 .env.*
 !.env.example
+
+# Inventarios de infraestructura reales (solo se versiona el ejemplo)
+inventory.yaml
+inventory.yml
+inventory.json
+!*inventory.example.yaml
 *.pem
 *.key
 *.crt

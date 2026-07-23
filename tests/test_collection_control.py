@@ -2,6 +2,7 @@
 
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 
@@ -170,15 +171,22 @@ def test_history_persists_failed_run(session_factory, session):
 
 
 def test_status_initial(client):
-    """Sin ejecuciones previas: nada corriendo, sin last_run, scheduler apagado."""
+    """Sin ejecuciones previas: contrato plano con valores neutros."""
     body = client.get("/api/v1/collection/status").json()
 
     assert body["running"] is False
-    assert body["current_run_started_at"] is None
-    assert body["last_run"] is None
-    assert body["scheduler"]["enabled"] is False
-    assert body["scheduler"]["next_run_at"] is None
-    assert body["scheduler"]["interval_seconds"] == 300
+    assert body["run_id"] is None
+    assert body["source"] is None
+    assert body["triggered_by"] is None
+    assert body["started_at"] is None
+    assert body["heartbeat_at"] is None
+    assert body["finished_at"] is None
+    assert body["duration_ms"] is None
+    assert body["status"] is None
+    assert body["inserted"] == 0
+    assert body["skipped"] == 0
+    assert body["errors"] == []
+    assert body["next_run_at"] is None
 
 
 def test_status_reads_persisted_history(client):
@@ -188,28 +196,31 @@ def test_status_reads_persisted_history(client):
     body = client.get("/api/v1/collection/status").json()
 
     assert body["running"] is False
-    last_run = body["last_run"]
-    assert last_run["status"] == "success"
-    assert last_run["triggered_by"] == "manual"
-    assert last_run["duration_ms"] >= 0
-    assert last_run["finished_at"] >= last_run["started_at"]
-    assert last_run["server_metrics_inserted"] >= 4
-    assert last_run["errors"] == []
+    assert body["run_id"] is not None
+    assert body["source"] == "mock"
+    assert body["status"] == "success"
+    assert body["triggered_by"] == "manual"
+    assert body["duration_ms"] >= 0
+    assert body["finished_at"] >= body["started_at"]
+    assert body["heartbeat_at"] is not None
+    assert body["inserted"] >= 24  # 5 servidores + 24 canales como mínimo
+    assert body["skipped"] == 0
+    assert body["errors"] == []
 
 
 def test_status_survives_process_restart(client, session_factory):
-    """El last_run proviene de la BD: sigue visible con un runner nuevo."""
+    """El estado proviene de la BD: sigue visible con un runner nuevo."""
     assert client.post("/api/v1/collection/run").status_code == 200
     # Simula un reinicio del proceso: el estado en memoria desaparece.
     get_collection_runner().reset()
 
     body = client.get("/api/v1/collection/status").json()
-    assert body["last_run"] is not None
-    assert body["last_run"]["status"] == "success"
+    assert body["status"] == "success"
+    assert body["run_id"] is not None
 
 
 def test_status_while_running(client, session_factory):
-    """Durante una recolección el status marca running y su inicio."""
+    """Durante una recolección el status describe la ejecución en curso."""
     runner = get_collection_runner()
     adapter = _BlockingAdapter()
     session = session_factory()
@@ -220,7 +231,10 @@ def test_status_while_running(client, session_factory):
         assert adapter.started.wait(timeout=5)
         body = client.get("/api/v1/collection/status").json()
         assert body["running"] is True
-        assert body["current_run_started_at"] is not None
+        assert body["status"] == "running"
+        assert body["started_at"] is not None
+        assert body["heartbeat_at"] is not None
+        assert body["finished_at"] is None
     finally:
         adapter.release.set()
         worker.join(timeout=10)
@@ -229,7 +243,7 @@ def test_status_while_running(client, session_factory):
 
 
 def test_status_detects_running_row_from_other_instance(client, session_factory):
-    """Una fila running fresca de otra instancia se refleja en el status."""
+    """Una fila running con heartbeat vigente se refleja en el status."""
     runner = get_collection_runner()
     adapter = _BlockingAdapter()
     session = session_factory()
@@ -243,7 +257,76 @@ def test_status_detects_running_row_from_other_instance(client, session_factory)
         runner.reset()
         body = client.get("/api/v1/collection/status").json()
         assert body["running"] is True
-        assert body["current_run_started_at"] is not None
+        assert body["status"] == "running"
     finally:
         adapter.release.set()
         worker.join(timeout=10)
+
+
+# --- Heartbeat y ejecuciones abandonadas ---------------------------------------
+
+
+def _seed_stale_running_row(session, heartbeat_age_seconds):
+    """Inserta una fila running con heartbeat de otra época (proceso caído)."""
+    stale_at = datetime.now(UTC) - timedelta(seconds=heartbeat_age_seconds)
+    run = CollectionRun(
+        started_at=stale_at,
+        heartbeat_at=stale_at,
+        source="mock",
+        status=CollectionRunStatus.RUNNING,
+        triggered_by=CollectionTrigger.MANUAL,
+        errors=[],
+    )
+    session.add(run)
+    session.commit()
+    return run
+
+
+def test_heartbeat_is_persisted_during_run(client, session):
+    """Una ejecución terminada deja heartbeat al menos tan nuevo como su inicio."""
+    assert client.post("/api/v1/collection/run").status_code == 200
+
+    run = session.scalars(select(CollectionRun)).one()
+    assert run.heartbeat_at is not None
+    assert run.heartbeat_at >= run.started_at
+    assert run.heartbeat_at == run.finished_at
+
+
+def test_status_ignores_abandoned_running_row(client, session):
+    """Una fila running con heartbeat vencido NO se reporta como en curso."""
+    # Heartbeat de hace una hora: supera el timeout por defecto (600 s).
+    _seed_stale_running_row(session, heartbeat_age_seconds=3600)
+
+    body = client.get("/api/v1/collection/status").json()
+
+    assert body["running"] is False
+    assert body["status"] is None, "sin ejecuciones terminadas no hay nada que mostrar"
+
+
+def test_status_respects_fresh_heartbeat(client, session):
+    """Una fila running con heartbeat reciente sí cuenta como en curso."""
+    _seed_stale_running_row(session, heartbeat_age_seconds=5)
+
+    body = client.get("/api/v1/collection/status").json()
+
+    assert body["running"] is True
+    assert body["status"] == "running"
+
+
+def test_new_run_marks_abandoned_rows_as_error(client, session):
+    """Al iniciar una recolección, las filas huérfanas pasan a error."""
+    stale = _seed_stale_running_row(session, heartbeat_age_seconds=3600)
+
+    assert client.post("/api/v1/collection/run").status_code == 200
+
+    session.expire_all()
+    abandoned = session.get(CollectionRun, stale.id)
+    assert abandoned is not None
+    assert abandoned.status is CollectionRunStatus.ERROR
+    assert "abandonada" in abandoned.errors[0]
+    # Libera la transacción de lectura antes de reutilizar la conexión
+    # SQLite compartida en el cliente HTTP.
+    session.rollback()
+    # Y la nueva ejecución quedó registrada como exitosa.
+    body = client.get("/api/v1/collection/status").json()
+    assert body["status"] == "success"

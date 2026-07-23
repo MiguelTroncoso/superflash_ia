@@ -22,6 +22,7 @@ class CollectionRunRepository:
         """Registra el inicio de una ejecución (estado ``running``)."""
         run = CollectionRun(
             started_at=started_at,
+            heartbeat_at=started_at,
             source=source,
             status=CollectionRunStatus.RUNNING,
             triggered_by=triggered_by,
@@ -30,10 +31,42 @@ class CollectionRunRepository:
         self._session.flush()
         return run
 
+    def heartbeat(self, run: CollectionRun, at: datetime) -> None:
+        """Actualiza la señal de vida de una ejecución activa."""
+        run.heartbeat_at = at
+        self._session.flush()
+
+    def mark_abandoned(self, heartbeat_older_than: datetime) -> int:
+        """Marca como error las filas ``running`` con heartbeat vencido.
+
+        Ocurre cuando un proceso murió sin completar su registro. Devuelve
+        cuántas filas se marcaron.
+        """
+        stale_runs = list(
+            self._session.scalars(
+                select(CollectionRun).where(
+                    CollectionRun.status == CollectionRunStatus.RUNNING,
+                    CollectionRun.heartbeat_at < heartbeat_older_than,
+                )
+            )
+        )
+        for run in stale_runs:
+            run.status = CollectionRunStatus.ERROR
+            run.finished_at = run.heartbeat_at
+            run.duration_ms = (
+                self._duration_ms(run.started_at, run.heartbeat_at)
+                if run.heartbeat_at is not None
+                else None
+            )
+            run.errors = ["abandonada: heartbeat vencido (proceso interrumpido)"]
+        self._session.flush()
+        return len(stale_runs)
+
     def finish_success(
         self, run: CollectionRun, result: CollectionResult, finished_at: datetime
     ) -> None:
         """Completa la ejecución con el resumen de la recolección."""
+        run.heartbeat_at = finished_at
         run.finished_at = finished_at
         run.duration_ms = self._duration_ms(run.started_at, finished_at)
         run.status = CollectionRunStatus.SUCCESS
@@ -48,6 +81,7 @@ class CollectionRunRepository:
 
     def finish_error(self, run: CollectionRun, error: str, finished_at: datetime) -> None:
         """Marca la ejecución como fallida con el motivo."""
+        run.heartbeat_at = finished_at
         run.finished_at = finished_at
         run.duration_ms = self._duration_ms(run.started_at, finished_at)
         run.status = CollectionRunStatus.ERROR

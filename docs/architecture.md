@@ -55,10 +55,19 @@ con exclusión mutua en dos niveles:
 El historial de ejecuciones se **persiste** en `collection_runs`: cada
 pasada inserta su fila al empezar (estado `running`) y la completa al
 terminar (fin, `duration_ms`, contadores, errores, origen
-manual/scheduler). `GET /api/v1/collection/status` lee de ahí: el
-`last_run` sobrevive a reinicios y refleja recolecciones de cualquier
-instancia; una fila `running` fresca de otra instancia se reporta como
-en ejecución, y las huérfanas (> 30 minutos) se ignoran.
+manual/scheduler). Durante la ejecución, el runner actualiza un
+**heartbeat** persistido (`heartbeat_at`) entre fases.
+
+`GET /api/v1/collection/status` lee de ahí y expone un contrato plano y
+estable (`running`, `run_id`, `source`, `triggered_by`, `started_at`,
+`heartbeat_at`, `finished_at`, `duration_ms`, `status`, `inserted`,
+`skipped`, `errors`, `next_run_at`): sobrevive a reinicios y refleja
+recolecciones de cualquier instancia. Una fila `running` cuenta como en
+curso solo mientras su heartbeat no supere `COLLECTION_TIMEOUT_SECONDS`
+(no una ventana fija): así una ejecución legítimamente larga sigue
+apareciendo como activa, mientras que una interrumpida se detecta como
+abandonada. Al iniciar una nueva pasada, las filas `running` con
+heartbeat vencido se marcan como `error` (`mark_abandoned`).
 
 ### Snapshot compuesto por ciclo
 
@@ -241,17 +250,45 @@ entrega, y entonces se incorporarán con una migración.
 
 El comando `python -m app.tasks.diagnose_source` valida la configuración
 y muestra qué datos entregaría cada fuente **sin escribir en la base de
-datos ni realizar conexiones externas**.
+datos**. Con `--infrastructure prometheus` comprueba conectividad, lista
+las métricas disponibles por host y valida las consultas, ocultando
+tokens.
 
-## Cómo se añadirá la fuente real
+### Fuente de infraestructura Prometheus (implementada)
 
-El proceso completo (opciones evaluadas, tabla comparativa de seguridad
-y recomendaciones) está en `docs/real-source-integration.md`. En corto:
+`PrometheusInfrastructureAdapter` (`app/adapters/prometheus.py`) es la
+primera fuente real. Consulta la API HTTP de Prometheus
+(`GET /api/v1/query`, **solo GET**, sin comandos remotos) y normaliza las
+métricas de node_exporter al `InfrastructureMetricSnapshot`. Los
+servidores a monitorear vienen de un **inventario local no versionado**
+(`app/adapters/inventory.py`), del que el repositorio solo incluye
+`config/inventory.example.yaml`.
+
+Rasgos de diseño:
+
+- **Solo lectura y sin fabricar datos**: un host con `up == 0` o sin
+  métricas esenciales no emite muestra; un host que falla se omite sin
+  bloquear a los demás; si fallan todos, la pasada queda en `error`.
+- **Seguridad**: URL, token, TLS y timeout llegan solo por configuración;
+  el token nunca se loguea; la verificación TLS no puede desactivarse en
+  producción (validado en `Settings`); `node_exporter_instance` se valida
+  contra inyección de PromQL.
+- **Composición**: con `MONITORING_ADAPTER=composite` +
+  `INFRASTRUCTURE_SOURCE=prometheus`, la infraestructura real se combina
+  con la fuente de streaming (aún mock) sin tocar el recolector.
+
+El detalle (variables, consultas PromQL, Netdata como alternativa) está
+en `docs/real-source-integration.md`.
+
+## Cómo se añadirá la próxima fuente real
+
+El proceso completo está en `docs/real-source-integration.md`. En corto:
 
 1. Declarar las variables de entorno de la fuente en `Settings` (nunca
    credenciales en el código; la API no acepta URLs arbitrarias).
 2. Implementar `InfrastructureMetricsAdapter` o
-   `StreamingMetricsAdapter` en `app/adapters/<fuente>.py`.
+   `StreamingMetricsAdapter` en `app/adapters/<fuente>.py` (el adaptador
+   Prometheus sirve de plantilla para otra fuente de infraestructura).
 3. Registrar el identificador en `factory.py` y en los `Literal` de
    `Settings` (`INFRASTRUCTURE_SOURCE` / `STREAMING_SOURCE`).
 4. Validar con `diagnose_source`, probar con respuestas grabadas, correr

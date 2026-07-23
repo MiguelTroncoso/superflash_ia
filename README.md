@@ -49,12 +49,20 @@ versión solo observa.
   espectadores, bitrate, estado del canal), con mocks de demostración,
   adaptador compuesto (`MONITORING_ADAPTER=composite`) y comando de
   diagnóstico sin persistencia (`python -m app.tasks.diagnose_source`).
+- **Fuente de infraestructura real Prometheus**
+  (`INFRASTRUCTURE_SOURCE=prometheus`): consulta node_exporter por HTTP
+  (solo GET), con inventario local no versionado, timeout y bearer token
+  configurables, TLS verificado y obligatorio en producción. La fuente
+  de streaming real aún no existe.
 - API de consulta: servidores, canales, históricos por rango de fechas y
   resumen agregado (`/api/v1/overview`).
+- Historial de recolecciones con **heartbeat persistido**: una ejecución
+  se considera abandonada solo si su heartbeat supera
+  `COLLECTION_TIMEOUT_SECONDS`.
 - Migraciones con Alembic y despliegue con Docker Compose.
 - CI en GitHub Actions: lint, tipos, pruebas y smoke test end-to-end
   contra PostgreSQL real (incluido el ciclo de migraciones).
-- Sin fuente real, sin escritura externa.
+- El mock sigue siendo la fuente por defecto; sin escritura externa.
 
 ## Arquitectura
 
@@ -214,6 +222,51 @@ manual, por lo que un ciclo nunca se solapa con una ejecución manual: el
 que llegue segundo se omite y queda registrado en el log.
 `GET /api/v1/collection/status` muestra el próximo ciclo (`next_run_at`).
 
+### Estado de la recolección y heartbeat
+
+`GET /api/v1/collection/status` describe la ejecución relevante (la que
+está en curso, o la última terminada) con un contrato plano y estable:
+`running`, `run_id`, `source`, `triggered_by`, `started_at`,
+`heartbeat_at`, `finished_at`, `duration_ms`, `status`, `inserted`,
+`skipped`, `errors`, `next_run_at`. Cada pasada actualiza un heartbeat
+persistido; una fila `running` solo se considera realmente en curso
+mientras su heartbeat no supere `COLLECTION_TIMEOUT_SECONDS` (default
+600 s). Al iniciar una nueva recolección, las filas `running` con
+heartbeat vencido (proceso caído) se marcan como `error`.
+
+### Conectar un servidor Prometheus real (infraestructura)
+
+Ver también `docs/real-source-integration.md`. Pasos:
+
+1. **Node exporter** corriendo en cada servidor y un Prometheus que lo
+   scrapea (esta plataforma no instala ni configura nada remoto).
+2. **Inventario local**: copia el ejemplo y edítalo con tus servidores;
+   `node_exporter_instance` debe coincidir con la etiqueta `instance` de
+   Prometheus. El archivo real **no se versiona**.
+   ```bash
+   cp config/inventory.example.yaml config/inventory.yaml
+   ```
+3. **Configuración** en tu `.env` (nunca en el repositorio):
+   ```bash
+   INFRASTRUCTURE_SOURCE=prometheus
+   MONITORING_ADAPTER=composite          # infra real + streaming mock (aún)
+   PROMETHEUS_URL=https://prometheus.tu-red.internal:9090
+   PROMETHEUS_BEARER_TOKEN=...            # opcional
+   INFRASTRUCTURE_INVENTORY_FILE=config/inventory.yaml
+   ```
+4. **Diagnostica** antes de recolectar (no escribe en la base de datos):
+   ```bash
+   python -m app.tasks.diagnose_source --infrastructure prometheus
+   ```
+5. **Recolecta** cuando el diagnóstico esté verde:
+   ```bash
+   curl -X POST -H "X-API-Key: $API_KEY" \
+       http://localhost:8000/api/v1/collection/run
+   ```
+
+La verificación TLS está activa por defecto y **no puede desactivarse**
+con `APP_ENV=production`. Solo se hacen solicitudes GET de consulta.
+
 El scheduler es de proceso único: actívalo solo con una instancia de la
 API. Con réplicas múltiples se usará un programador externo o un lock
 distribuido (ver `docs/architecture.md`).
@@ -238,6 +291,10 @@ python -m app.tasks.collect --seed 42
 # entregaría cada fuente, SIN escribir en la base de datos.
 python -m app.tasks.diagnose_source
 python -m app.tasks.diagnose_source --source infrastructure
+
+# Diagnóstico de Prometheus: comprueba conectividad, lista las métricas
+# disponibles por host y valida las consultas (los tokens quedan ocultos).
+python -m app.tasks.diagnose_source --infrastructure prometheus
 ```
 
 Respuesta típica:

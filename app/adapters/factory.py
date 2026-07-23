@@ -9,8 +9,10 @@ del código ni del repositorio. Ver docs/real-source-integration.md.
 
 from app.adapters.base import MonitoringSourceAdapter
 from app.adapters.composite import CompositeMonitoringAdapter
+from app.adapters.inventory import load_inventory
 from app.adapters.mock import MockMonitoringAdapter
 from app.adapters.mock_sources import MockInfrastructureAdapter, MockStreamingAdapter
+from app.adapters.prometheus import PrometheusInfrastructureAdapter
 from app.adapters.sources import InfrastructureMetricsAdapter, StreamingMetricsAdapter
 from app.core.config import Settings
 
@@ -19,10 +21,27 @@ def get_infrastructure_adapter(settings: Settings) -> InfrastructureMetricsAdapt
     """Construye la fuente de infraestructura configurada.
 
     Raises:
-        ValueError: Si el identificador configurado no está soportado.
+        ValueError: Si el identificador configurado no está soportado o
+            su configuración está incompleta o es inválida.
     """
     if settings.infrastructure_source == "mock":
         return MockInfrastructureAdapter(seed=settings.mock_seed)
+    if settings.infrastructure_source == "prometheus":
+        if not settings.prometheus_url:
+            raise ValueError("INFRASTRUCTURE_SOURCE=prometheus requiere PROMETHEUS_URL configurada")
+        if not settings.infrastructure_inventory_file:
+            raise ValueError(
+                "INFRASTRUCTURE_SOURCE=prometheus requiere INFRASTRUCTURE_INVENTORY_FILE "
+                "(inventario local, ver config/inventory.example.yaml)"
+            )
+        inventory = load_inventory(settings.infrastructure_inventory_file)
+        return PrometheusInfrastructureAdapter(
+            base_url=settings.prometheus_url,
+            inventory=inventory,
+            timeout_seconds=settings.prometheus_timeout_seconds,
+            bearer_token=settings.prometheus_bearer_token,
+            verify_tls=settings.prometheus_tls_verify,
+        )
     raise ValueError(f"Fuente de infraestructura no soportada: {settings.infrastructure_source!r}")
 
 

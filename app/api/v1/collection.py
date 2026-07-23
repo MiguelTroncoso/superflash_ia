@@ -2,8 +2,8 @@
 
 Como todo ``/api/v1``, requieren la cabecera ``X-API-Key`` (política
 fail-closed). El estado se lee del historial persistido en
-``collection_runs``, por lo que refleja recolecciones de cualquier
-instancia y sobrevive a reinicios del proceso.
+``collection_runs`` con heartbeat: una ejecución solo se considera en
+curso mientras su señal de vida no supere ``COLLECTION_TIMEOUT_SECONDS``.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -17,21 +17,12 @@ from app.api.deps import get_db
 from app.collectors.runner import CollectionAlreadyRunningError, get_collection_runner
 from app.core.config import Settings, get_settings
 from app.core.timeutils import ensure_utc
-from app.models.collection_run import CollectionRunStatus, CollectionTrigger
+from app.models.collection_run import CollectionRun, CollectionRunStatus, CollectionTrigger
 from app.repositories.collection_run_repository import CollectionRunRepository
-from app.schemas.collection import (
-    CollectionResult,
-    CollectionRunRead,
-    CollectionStatusRead,
-    SchedulerStatus,
-)
+from app.schemas.collection import CollectionResult, CollectionStatusRead
 from app.tasks.scheduler import get_active_scheduler
 
 router = APIRouter(prefix="/collection", tags=["collection (interno)"])
-
-# Una fila "running" más antigua que esto se considera huérfana (proceso
-# caído sin completar el registro) y no se reporta como en ejecución.
-STALE_RUNNING_AFTER = timedelta(minutes=30)
 
 
 @router.post("/run", response_model=CollectionResult)
@@ -48,7 +39,12 @@ def run_collection(
     """
     adapter = get_adapter(settings)
     try:
-        return get_collection_runner().run(session, adapter, triggered_by=CollectionTrigger.MANUAL)
+        return get_collection_runner().run(
+            session,
+            adapter,
+            triggered_by=CollectionTrigger.MANUAL,
+            timeout_seconds=settings.collection_timeout_seconds,
+        )
     except CollectionAlreadyRunningError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -56,38 +52,54 @@ def run_collection(
         ) from None
 
 
+def _status_from_run(
+    run: CollectionRun, running: bool, next_run_at: datetime | None
+) -> CollectionStatusRead:
+    """Proyecta una fila de ``collection_runs`` al contrato estable."""
+    return CollectionStatusRead(
+        running=running,
+        run_id=run.id,
+        source=run.source,
+        triggered_by=run.triggered_by,
+        started_at=run.started_at,
+        heartbeat_at=run.heartbeat_at,
+        finished_at=run.finished_at,
+        duration_ms=run.duration_ms,
+        status=run.status,
+        inserted=run.server_metrics_inserted + run.channel_metrics_inserted,
+        skipped=run.server_metrics_skipped + run.channel_metrics_skipped,
+        errors=list(run.errors),
+        next_run_at=next_run_at,
+    )
+
+
 @router.get("/status", response_model=CollectionStatusRead)
 def collection_status(
     session: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> CollectionStatusRead:
-    """Estado del recolector: última ejecución persistida, curso y scheduler."""
+    """Estado del recolector según el historial persistido.
+
+    Si hay una ejecución en curso (heartbeat vigente), la describe; si
+    no, describe la última terminada. Sin historial devuelve el estado
+    vacío con ``running=false``.
+    """
     runner = get_collection_runner()
     scheduler = get_active_scheduler()
+    next_run_at = scheduler.next_run_at if scheduler is not None else None
     runs = CollectionRunRepository(session)
 
-    running = runner.is_running
-    current_started_at = runner.running_since
     latest = runs.latest()
-    if not running and latest is not None and latest.status is CollectionRunStatus.RUNNING:
-        started_at = ensure_utc(latest.started_at)
-        if datetime.now(UTC) - started_at <= STALE_RUNNING_AFTER:
-            # Recolección en curso en otra instancia (fila running fresca).
-            running = True
-            current_started_at = started_at
+    if latest is not None and latest.status is CollectionRunStatus.RUNNING:
+        heartbeat = ensure_utc(latest.heartbeat_at or latest.started_at)
+        fresh = datetime.now(UTC) - heartbeat <= timedelta(
+            seconds=settings.collection_timeout_seconds
+        )
+        if fresh or runner.is_running:
+            return _status_from_run(latest, running=True, next_run_at=next_run_at)
 
     last_finished = runs.latest_finished()
-    return CollectionStatusRead(
-        running=running,
-        current_run_started_at=current_started_at,
-        last_run=(
-            CollectionRunRead.model_validate(last_finished) if last_finished is not None else None
-        ),
-        scheduler=SchedulerStatus(
-            enabled=scheduler is not None and scheduler.is_active,
-            interval_seconds=(
-                scheduler.interval_seconds if scheduler else settings.collection_interval_seconds
-            ),
-            next_run_at=scheduler.next_run_at if scheduler else None,
-        ),
-    )
+    if last_finished is not None:
+        return _status_from_run(last_finished, running=False, next_run_at=next_run_at)
+
+    return CollectionStatusRead(running=False, next_run_at=next_run_at)

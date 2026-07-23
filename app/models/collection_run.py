@@ -37,6 +37,9 @@ class CollectionRun(Base):
 
     id: Mapped[int] = mapped_column(BigIntPK, primary_key=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    # Última señal de vida de una ejecución activa. Una fila "running" solo
+    # se considera realmente en curso si su heartbeat no superó el timeout.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     source: Mapped[str] = mapped_column(String(100))

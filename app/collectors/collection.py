@@ -11,6 +11,7 @@ programador (p. ej. cron o un scheduler in-process) invoque
 """
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
@@ -28,11 +29,22 @@ logger = logging.getLogger(__name__)
 class CollectionService:
     """Ejecuta una recolección completa contra el adaptador configurado."""
 
-    def __init__(self, session: Session, adapter: MonitoringSourceAdapter) -> None:
+    def __init__(
+        self,
+        session: Session,
+        adapter: MonitoringSourceAdapter,
+        on_heartbeat: Callable[[], None] | None = None,
+    ) -> None:
         self._session = session
         self._adapter = adapter
+        self._on_heartbeat = on_heartbeat
         self._servers = ServerRepository(session)
         self._channels = ChannelRepository(session)
+
+    def _heartbeat(self) -> None:
+        """Señal de vida entre fases (el runner la persiste)."""
+        if self._on_heartbeat is not None:
+            self._on_heartbeat()
 
     def run(self) -> CollectionResult:
         """Sincroniza inventario, guarda métricas y devuelve un resumen.
@@ -48,8 +60,11 @@ class CollectionService:
         self._adapter.begin_collection_cycle()
 
         server_ids = self._sync_servers(result)
+        self._heartbeat()
         self._sync_channels(result, server_ids)
+        self._heartbeat()
         self._store_server_metrics(result, server_ids)
+        self._heartbeat()
         self._store_channel_metrics(result, server_ids)
 
         self._session.commit()

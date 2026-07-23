@@ -147,14 +147,19 @@ def main() -> int:
             "overview: utilización de red calculada para todos los servidores mock",
         )
 
-        # 6. Estado del recolector (historial persistido).
+        # 6. Estado del recolector (contrato plano, historial persistido).
         status, cstatus = request("GET", "/api/v1/collection/status", auth)
         check(status == 200, "status de recolección disponible")
         check(cstatus["running"] is False, "status: sin recolección en curso")
-        check(cstatus["last_run"]["status"] == "success", "status: última ejecución exitosa")
-        check(cstatus["last_run"]["triggered_by"] == "manual", "status: disparo manual registrado")
-        check(cstatus["last_run"]["duration_ms"] >= 0, "status: duración registrada")
-        check(cstatus["scheduler"]["enabled"] is False, "status: scheduler apagado por defecto")
+        check(cstatus["status"] == "success", "status: última ejecución exitosa")
+        check(cstatus["triggered_by"] == "manual", "status: disparo manual registrado")
+        check(cstatus["duration_ms"] >= 0, "status: duración registrada")
+        check(cstatus["heartbeat_at"] is not None, "status: heartbeat persistido")
+        # El último run reflejado es la segunda recolección (deduplicada):
+        # no inserta nada y omite servidores + canales.
+        check(cstatus["inserted"] == 0, "status: segunda pasada sin inserciones")
+        check(cstatus["skipped"] >= 24, "status: métricas omitidas agregadas")
+        check(cstatus["next_run_at"] is None, "status: sin scheduler, sin próximo ciclo")
 
         # 7. Alertas internas.
         status, alerts = request("GET", "/api/v1/alerts", auth)

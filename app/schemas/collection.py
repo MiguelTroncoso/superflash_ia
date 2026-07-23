@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from app.models.collection_run import CollectionRunStatus, CollectionTrigger
 
@@ -22,43 +22,31 @@ class CollectionResult(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
-class CollectionRunRead(BaseModel):
-    """Ejecución de recolección persistida en ``collection_runs``."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    started_at: datetime
-    finished_at: datetime | None
-    duration_ms: int | None
-    source: str
-    status: CollectionRunStatus
-    triggered_by: CollectionTrigger
-    servers_synced: int
-    channels_synced: int
-    server_metrics_inserted: int
-    server_metrics_skipped: int
-    channel_metrics_inserted: int
-    channel_metrics_skipped: int
-    errors: list[str]
-
-
-class SchedulerStatus(BaseModel):
-    """Estado del programador periódico de recolecciones."""
-
-    enabled: bool
-    interval_seconds: float
-    next_run_at: datetime | None = None
-
-
 class CollectionStatusRead(BaseModel):
-    """Estado observable del subsistema de recolección.
+    """Contrato estable de ``GET /api/v1/collection/status``.
 
-    ``last_run`` proviene del historial persistido, por lo que es visible
-    desde cualquier instancia y sobrevive a reinicios del proceso.
+    Describe la ejecución relevante: la que está en curso si la hay, o la
+    última terminada. Los campos provienen del historial persistido
+    (``collection_runs``), por lo que el estado es visible desde
+    cualquier instancia y sobrevive a reinicios. Una fila ``running``
+    solo cuenta como en curso si su ``heartbeat_at`` no superó
+    ``COLLECTION_TIMEOUT_SECONDS``.
+
+    ``inserted`` y ``skipped`` agregan métricas de servidores y canales.
+    ``next_run_at`` es el próximo ciclo del scheduler (null si está
+    apagado o la consulta llega a una instancia sin scheduler).
     """
 
     running: bool
-    current_run_started_at: datetime | None = None
-    last_run: CollectionRunRead | None = None
-    scheduler: SchedulerStatus
+    run_id: int | None = None
+    source: str | None = None
+    triggered_by: CollectionTrigger | None = None
+    started_at: datetime | None = None
+    heartbeat_at: datetime | None = None
+    finished_at: datetime | None = None
+    duration_ms: int | None = None
+    status: CollectionRunStatus | None = None
+    inserted: int = 0
+    skipped: int = 0
+    errors: list[str] = Field(default_factory=list)
+    next_run_at: datetime | None = None

@@ -16,7 +16,7 @@ proceso y es visible desde cualquier instancia.
 
 import logging
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
@@ -60,8 +60,13 @@ class CollectionRunner:
         session: Session,
         adapter: MonitoringSourceAdapter,
         triggered_by: CollectionTrigger = CollectionTrigger.MANUAL,
+        timeout_seconds: float = 600.0,
     ) -> CollectionResult:
         """Ejecuta una recolección si no hay otra en curso.
+
+        ``timeout_seconds`` (``COLLECTION_TIMEOUT_SECONDS``) define
+        cuándo una fila ``running`` heredada se considera abandonada:
+        solo si su heartbeat superó ese plazo.
 
         Raises:
             CollectionAlreadyRunningError: Si otra recolección está
@@ -79,7 +84,7 @@ class CollectionRunner:
                 raise CollectionAlreadyRunningError(
                     "otra instancia está ejecutando una recolección"
                 )
-            return self._run_locked(session, adapter, triggered_by)
+            return self._run_locked(session, adapter, triggered_by, timeout_seconds)
         finally:
             distributed_lock.release()
             self._thread_lock.release()
@@ -89,6 +94,7 @@ class CollectionRunner:
         session: Session,
         adapter: MonitoringSourceAdapter,
         triggered_by: CollectionTrigger,
+        timeout_seconds: float,
     ) -> CollectionResult:
         """Ejecuta la recolección con los locks ya tomados."""
         started_at = datetime.now(UTC)
@@ -96,13 +102,24 @@ class CollectionRunner:
             self._running_since = started_at
 
         runs = CollectionRunRepository(session)
+        # Limpieza de filas running huérfanas (proceso caído): solo las que
+        # superaron el timeout de heartbeat se consideran abandonadas.
+        abandoned = runs.mark_abandoned(
+            heartbeat_older_than=started_at - timedelta(seconds=timeout_seconds)
+        )
+        if abandoned:
+            logger.warning("marcadas %d recolecciones abandonadas (heartbeat vencido)", abandoned)
         run_row = runs.start(
             source=adapter.source_name, started_at=started_at, triggered_by=triggered_by
         )
         session.commit()
 
+        def _persist_heartbeat() -> None:
+            runs.heartbeat(run_row, at=datetime.now(UTC))
+            session.commit()
+
         try:
-            result = CollectionService(session, adapter).run()
+            result = CollectionService(session, adapter, on_heartbeat=_persist_heartbeat).run()
             runs.finish_success(run_row, result, finished_at=datetime.now(UTC))
             session.commit()
             return result

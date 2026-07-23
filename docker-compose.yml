@@ -56,7 +56,19 @@ services:
       API_KEY: ${API_KEY:-}
       SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-false}
       COLLECTION_INTERVAL_SECONDS: ${COLLECTION_INTERVAL_SECONDS:-300}
+      COLLECTION_TIMEOUT_SECONDS: ${COLLECTION_TIMEOUT_SECONDS:-600}
       METRICS_RETENTION_DAYS: ${METRICS_RETENTION_DAYS:-}
+      # Fuente de infraestructura Prometheus (solo si INFRASTRUCTURE_SOURCE=prometheus).
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-}
+      PROMETHEUS_TIMEOUT_SECONDS: ${PROMETHEUS_TIMEOUT_SECONDS:-10}
+      PROMETHEUS_BEARER_TOKEN: ${PROMETHEUS_BEARER_TOKEN:-}
+      PROMETHEUS_TLS_VERIFY: ${PROMETHEUS_TLS_VERIFY:-true}
+      # Ruta del inventario DENTRO del contenedor (ver volumen de solo lectura).
+      INFRASTRUCTURE_INVENTORY_FILE: ${INFRASTRUCTURE_INVENTORY_FILE:-}
+    volumes:
+      # Monta el directorio de configuración local (inventario) como SOLO
+      # LECTURA. El archivo real no se versiona; solo se incluye el ejemplo.
+      - ./config:/srv/app/config:ro
     depends_on:
       db:
         condition: service_healthy

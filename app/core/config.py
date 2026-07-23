@@ -8,7 +8,7 @@ versionan en el repositorio.
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -34,10 +34,23 @@ class Settings(BaseSettings):
     mock_seed: int = 42
 
     # Fuentes por tipo, usadas por "composite" y por el comando de
-    # diagnóstico. Las fuentes reales (prometheus, netdata, panel...) se
+    # diagnóstico. Fuentes reales adicionales (netdata, panel...) se
     # registrarán como nuevos valores en app/adapters/factory.py.
-    infrastructure_source: Literal["mock"] = "mock"
+    infrastructure_source: Literal["mock", "prometheus"] = "mock"
     streaming_source: Literal["mock"] = "mock"
+
+    # --- Fuente de infraestructura: Prometheus (node_exporter) ---
+    # URL base del servidor Prometheus (solo se hacen GET de consulta).
+    prometheus_url: str | None = None
+    prometheus_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    # Token opcional (cabecera Authorization: Bearer ...). Nunca se loguea.
+    prometheus_bearer_token: str | None = None
+    # Verificación TLS activada por defecto; en producción no puede
+    # desactivarse (ver validador más abajo).
+    prometheus_tls_verify: bool = True
+    # Inventario local de servidores (YAML o JSON, NO versionado).
+    # Ejemplo sin datos reales: config/inventory.example.yaml
+    infrastructure_inventory_file: str | None = None
 
     # Clave requerida por TODOS los endpoints /api/v1 (cabecera X-API-Key).
     # Sin clave configurada, la API se niega a operar (fail-closed).
@@ -49,6 +62,10 @@ class Settings(BaseSettings):
     # Programador de recolección periódica. Deshabilitado por defecto.
     scheduler_enabled: bool = False
     collection_interval_seconds: int = Field(default=300, ge=5)
+
+    # Una recolección se considera abandonada solo cuando su heartbeat
+    # supera este plazo (proceso interrumpido sin completar el registro).
+    collection_timeout_seconds: int = Field(default=600, ge=30)
 
     # Retención de histórico (métricas y ejecuciones). None = deshabilitada;
     # la limpieza jamás corre sin este valor configurado explícitamente.
@@ -73,6 +90,13 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
+
+    @model_validator(mode="after")
+    def _forbid_insecure_tls_in_production(self) -> "Settings":
+        """En producción la verificación TLS de Prometheus es obligatoria."""
+        if self.app_env == "production" and not self.prometheus_tls_verify:
+            raise ValueError("PROMETHEUS_TLS_VERIFY=false no está permitido con APP_ENV=production")
+        return self
 
 
 @lru_cache
