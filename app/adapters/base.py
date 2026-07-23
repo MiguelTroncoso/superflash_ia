@@ -1,0 +1,91 @@
+"""Contrato que debe cumplir toda fuente de datos de monitoreo.
+
+Los adaptadores devuelven *snapshots* Pydantic — validados en la
+frontera del sistema — en lugar de modelos ORM, de modo que la capa de
+persistencia quede desacoplada de la fuente concreta (mock hoy, panel
+real en el futuro).
+"""
+
+from abc import ABC, abstractmethod
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+from app.models.channel import ChannelStatus
+from app.models.server import ServerRole
+
+
+class ServerSnapshot(BaseModel):
+    """Datos de inventario de un servidor según la fuente externa."""
+
+    external_id: str
+    name: str
+    hostname: str | None = None
+    role: ServerRole = ServerRole.OTHER
+    network_capacity_mbps: float | None = Field(default=None, ge=0)
+    enabled: bool = True
+
+
+class ServerMetricSnapshot(BaseModel):
+    """Muestra de métricas de un servidor entregada por la fuente."""
+
+    server_external_id: str
+    collected_at: datetime
+    cpu_percent: float = Field(ge=0, le=100)
+    memory_percent: float = Field(ge=0, le=100)
+    input_mbps: float = Field(ge=0)
+    output_mbps: float = Field(ge=0)
+    active_connections: int = Field(ge=0)
+    active_streams: int = Field(ge=0)
+    uptime_seconds: int | None = Field(default=None, ge=0)
+
+
+class ChannelSnapshot(BaseModel):
+    """Datos de inventario de un canal según la fuente externa."""
+
+    external_id: str
+    name: str
+    category: str | None = None
+    server_external_id: str | None = None
+    enabled: bool = True
+
+
+class ChannelMetricSnapshot(BaseModel):
+    """Muestra de métricas de un canal entregada por la fuente."""
+
+    channel_external_id: str
+    server_external_id: str | None = None
+    collected_at: datetime
+    viewers: int = Field(ge=0)
+    bitrate_mbps: float | None = Field(default=None, ge=0)
+    estimated_output_mbps: float | None = Field(default=None, ge=0)
+    status: ChannelStatus = ChannelStatus.UNKNOWN
+
+
+class MonitoringSourceAdapter(ABC):
+    """Interfaz de solo lectura hacia una fuente de datos de monitoreo.
+
+    Las implementaciones NUNCA deben modificar la fuente: este contrato
+    es exclusivamente de consulta.
+    """
+
+    @property
+    @abstractmethod
+    def source_name(self) -> str:
+        """Identificador de la fuente (se persiste en ``ServerMetric.source``)."""
+
+    @abstractmethod
+    def get_servers(self) -> list[ServerSnapshot]:
+        """Devuelve el inventario actual de servidores."""
+
+    @abstractmethod
+    def get_server_metrics(self) -> list[ServerMetricSnapshot]:
+        """Devuelve una muestra de métricas por servidor."""
+
+    @abstractmethod
+    def get_channels(self) -> list[ChannelSnapshot]:
+        """Devuelve el inventario actual de canales."""
+
+    @abstractmethod
+    def get_channel_metrics(self) -> list[ChannelMetricSnapshot]:
+        """Devuelve una muestra de métricas por canal."""

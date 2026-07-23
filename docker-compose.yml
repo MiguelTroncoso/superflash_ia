@@ -1,0 +1,73 @@
+# SuperFlash Monitor: API + PostgreSQL.
+#
+# Las migraciones se ejecutan en un servicio one-shot ("migrations") que
+# corre una sola vez antes de que arranque la API. Con varias réplicas
+# futuras de la API este patrón evita condiciones de carrera: ninguna
+# réplica ejecuta "alembic upgrade" por su cuenta.
+#
+# Credenciales: valores de desarrollo por defecto; en cualquier entorno
+# real defínelas en un archivo .env (nunca versionado).
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-superflash}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-superflash}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-superflash} -d ${POSTGRES_DB:-superflash}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  migrations:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-superflash}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-superflash}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      APP_NAME: ${APP_NAME:-SuperFlash Monitor}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-superflash}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-superflash}
+      MONITORING_ADAPTER: ${MONITORING_ADAPTER:-mock}
+      MOCK_SEED: ${MOCK_SEED:-42}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  pgdata:

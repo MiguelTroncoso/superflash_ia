@@ -1,0 +1,51 @@
+# Entornos y credenciales (nunca subir datos reales)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+credentials*
+secrets*
+config.local.*
+*.local.toml
+*.local.yaml
+*.local.yml
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Bases de datos locales
+*.sqlite
+*.sqlite3
+*.db
+pgdata/
+
+# Archivos temporales y del sistema
+*.tmp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# IDEs
+.idea/
+.vscode/
