@@ -15,12 +15,32 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401 - registra todas las tablas en Base.metadata
+from app.collectors.runner import get_collection_runner
+from app.core.config import Settings, get_settings
 from app.database.base import Base
 from app.database.session import get_db
 from app.main import app as fastapi_app
 
 # Instante fijo para tests deterministas (se trunca al minuto: 12:34:00Z).
 FIXED_NOW = datetime(2026, 7, 23, 12, 34, 56, tzinfo=UTC)
+
+# Clave usada por los tests para el endpoint interno de recolección.
+TEST_API_KEY = "test-api-key"
+
+
+def make_test_settings(**overrides: object) -> Settings:
+    """Settings aislados del entorno y del archivo .env local."""
+    defaults: dict[str, object] = {"collection_api_key": TEST_API_KEY}
+    defaults.update(overrides)
+    return Settings(_env_file=None, **defaults)  # type: ignore[arg-type]
+
+
+@pytest.fixture(autouse=True)
+def _reset_collection_runner() -> Iterator[None]:
+    """Limpia el estado del runner (singleton de proceso) entre tests."""
+    get_collection_runner().reset()
+    yield
+    get_collection_runner().reset()
 
 
 @pytest.fixture()
@@ -63,7 +83,7 @@ def session(session_factory: sessionmaker[Session]) -> Iterator[Session]:
 
 @pytest.fixture()
 def client(session_factory: sessionmaker[Session]) -> Iterator[TestClient]:
-    """Cliente HTTP con la dependencia de base de datos redirigida a SQLite."""
+    """Cliente HTTP con base de datos SQLite y settings de test aislados."""
 
     def _override_get_db() -> Iterator[Session]:
         db = session_factory()
@@ -72,7 +92,9 @@ def client(session_factory: sessionmaker[Session]) -> Iterator[TestClient]:
         finally:
             db.close()
 
+    test_settings = make_test_settings()
     fastapi_app.dependency_overrides[get_db] = _override_get_db
+    fastapi_app.dependency_overrides[get_settings] = lambda: test_settings
     with TestClient(fastapi_app) as test_client:
         yield test_client
     fastapi_app.dependency_overrides.clear()

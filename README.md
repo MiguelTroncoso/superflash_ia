@@ -24,11 +24,18 @@ versión solo observa.
   5 servidores con capacidades distintas y 24 canales con audiencias
   variadas y coherentes.
 - Recolección manual (endpoint interno y comando CLI) con deduplicación
-  de muestras y aislamiento de errores por elemento.
+  de muestras, aislamiento de errores por elemento y **exclusión mutua**:
+  nunca corren dos recolecciones a la vez en el mismo proceso.
+- Endpoint interno protegido por **API key** (`COLLECTION_API_KEY`,
+  fail-closed) y endpoint de estado (`/api/v1/collection/status`).
+- **Scheduler opcional** de recolección periódica (cada 5 minutos por
+  defecto), deshabilitado salvo que se active explícitamente.
 - API de consulta: servidores, canales, históricos por rango de fechas y
   resumen agregado (`/api/v1/overview`).
 - Migraciones con Alembic y despliegue con Docker Compose.
-- Sin scheduler automático, sin fuente real, sin escritura externa.
+- CI en GitHub Actions: lint, tipos, pruebas y smoke test end-to-end
+  contra PostgreSQL real (incluido el ciclo de migraciones).
+- Sin fuente real, sin escritura externa.
 
 ## Arquitectura
 
@@ -43,7 +50,7 @@ app/
   services/       # Lógica de negocio (overview)
   collectors/     # Servicio de recolección
   adapters/       # Interfaz MonitoringSourceAdapter + mock
-  tasks/          # Comandos CLI (recolección manual)
+  tasks/          # Comandos CLI y scheduler periódico opcional
   main.py         # Fábrica de la aplicación
 alembic/          # Migraciones
 tests/            # Pruebas unitarias y de integración
@@ -112,7 +119,18 @@ pytest          # pruebas (SQLite en memoria, no requiere PostgreSQL)
 ruff check .    # linter
 ruff format .   # formateo
 mypy app        # verificación de tipos
+
+# Smoke test end-to-end (migraciones + API real). Requiere una BD:
+DATABASE_URL=postgresql+psycopg://... COLLECTION_API_KEY=una-clave \
+    python scripts/smoke_test.py
 ```
+
+La integración continua (`.github/workflows/ci.yml`) ejecuta en cada
+push: `ruff check`, `ruff format --check`, `mypy app`, `pytest`, y un
+smoke test contra PostgreSQL 16 real (servicio de GitHub Actions) que
+verifica el ciclo completo de migraciones (`upgrade` → `downgrade` →
+`upgrade`), la autenticación, la recolección con deduplicación, el
+overview y el endpoint de estado.
 
 ## Endpoints disponibles
 
@@ -124,21 +142,42 @@ mypy app        # verificación de tipos
 | GET  | `/api/v1/servers/{id}/metrics` | Histórico (`start`, `end`, `limit`) |
 | GET  | `/api/v1/channels` | Canales (filtros `server_id`, `category`, `enabled`) |
 | GET  | `/api/v1/channels/{id}/metrics` | Histórico del canal (`start`, `end`, `limit`) |
-| POST | `/api/v1/collection/run` | **Interno**: ejecuta una recolección mock |
+| POST | `/api/v1/collection/run` | **Interno, requiere API key**: ejecuta una recolección |
+| GET  | `/api/v1/collection/status` | Estado del recolector y del scheduler |
 | GET  | `/api/v1/overview` | Estadísticas agregadas actuales |
 
-`POST /api/v1/collection/run` es un endpoint interno: hoy no requiere
-autenticación porque el despliegue previsto es en red privada, y está
-preparado para protegerse con una dependencia de FastAPI antes de
-exponerse fuera de ese perímetro.
+### Autenticación del endpoint interno
+
+`POST /api/v1/collection/run` exige la cabecera `X-API-Key` con el valor
+de `COLLECTION_API_KEY` (solo variable de entorno, nunca en el código).
+La política es *fail-closed*: si la variable no está configurada, el
+endpoint responde `503` en lugar de quedar abierto. Clave ausente o
+incorrecta → `401`. Si ya hay una recolección en curso → `409`.
+
+### Recolección automática (scheduler)
+
+Con `SCHEDULER_ENABLED=true` la API ejecuta una recolección cada
+`COLLECTION_INTERVAL_SECONDS` (300 = 5 minutos, mínimo 5). Está
+**deshabilitado por defecto** y comparte el mismo lock que el endpoint
+manual, por lo que un ciclo nunca se solapa con una ejecución manual: el
+que llegue segundo se omite y queda registrado en el log.
+`GET /api/v1/collection/status` muestra el próximo ciclo (`next_run_at`).
+
+El scheduler es de proceso único: actívalo solo con una instancia de la
+API. Con réplicas múltiples se usará un programador externo o un lock
+distribuido (ver `docs/architecture.md`).
 
 ## Ejemplo de recolección
 
 ```bash
-# Vía API
-curl -X POST http://localhost:8000/api/v1/collection/run
+# Vía API (requiere la clave configurada en COLLECTION_API_KEY)
+curl -X POST -H "X-API-Key: $COLLECTION_API_KEY" \
+    http://localhost:8000/api/v1/collection/run
 
-# Vía CLI (mismo comportamiento; --seed opcional)
+# Estado del recolector
+curl http://localhost:8000/api/v1/collection/status
+
+# Vía CLI (mismo comportamiento, sin pasar por HTTP; --seed opcional)
 python -m app.tasks.collect --seed 42
 ```
 
@@ -173,6 +212,12 @@ constraint de unicidad en la base de datos.
   `(server_id, collected_at)` / `(channel_id, collected_at)`.
 - **Savepoints por elemento en la recolección**: un servidor o canal que
   falla se registra y no aborta el resto de la pasada.
+- **Runner con lock de proceso**: el endpoint manual y el scheduler pasan
+  por el mismo `CollectionRunner`; la segunda recolección simultánea se
+  rechaza (409) o se omite, nunca se ejecuta en paralelo.
+- **API key fail-closed**: sin `COLLECTION_API_KEY` el endpoint interno
+  responde 503; la comparación usa `secrets.compare_digest` y la clave
+  jamás se loguea.
 - **Migraciones en contenedor one-shot**: una sola ejecución de
   `alembic upgrade` por despliegue, sin carreras entre réplicas.
 - **Esquema portable (PostgreSQL/SQLite)**: los tests corren contra
@@ -183,16 +228,20 @@ constraint de unicidad en la base de datos.
 ## Limitaciones actuales
 
 - Solo datos simulados: no existe todavía adaptador para el panel real.
-- Sin scheduler: la recolección es manual (endpoint o CLI).
-- Sin autenticación: pensado para red privada; proteger antes de exponer.
+- El lock de recolección y el estado de `/collection/status` viven en
+  memoria del proceso: válidos para **una** instancia de la API. Con
+  réplicas se necesitará un lock distribuido (p. ej. `pg_advisory_lock`).
+- El scheduler es in-process y de instancia única.
+- Los endpoints de consulta (GET) no requieren autenticación: pensados
+  para red privada.
 - Sin paginación por cursor en históricos (solo `limit` + rango).
 - Sin retención/compactación de métricas antiguas.
 
 ## Próximos pasos
 
 1. Adaptador de la fuente real (solo lectura, credenciales por entorno).
-2. Scheduler de recolección cada 5 minutos (reutilizando `app/tasks`).
-3. Autenticación para endpoints internos.
+2. Lock distribuido y estado compartido para despliegues con réplicas.
+3. Autenticación para el resto de endpoints si salen de la red privada.
 4. Política de retención de métricas históricas.
 5. Motor de recomendaciones de distribución de canales (solo sugerencias,
    nunca acciones automáticas).

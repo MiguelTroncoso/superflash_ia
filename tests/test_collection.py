@@ -14,7 +14,7 @@ from app.adapters.base import (
 from app.adapters.mock import MockMonitoringAdapter
 from app.collectors.collection import CollectionService
 from app.models import Channel, ChannelMetric, Server, ServerMetric
-from tests.conftest import FIXED_NOW
+from tests.conftest import FIXED_NOW, TEST_API_KEY
 
 
 def _run(session, now):
@@ -136,7 +136,7 @@ def test_collection_isolates_per_item_failures(session):
 
 def test_collection_endpoint_runs_mock(client):
     """POST /api/v1/collection/run genera y guarda datos simulados."""
-    response = client.post("/api/v1/collection/run")
+    response = client.post("/api/v1/collection/run", headers={"X-API-Key": TEST_API_KEY})
 
     assert response.status_code == 200
     body = response.json()

@@ -16,8 +16,11 @@ flowchart LR
     A[MockMonitoringAdapter] -->|snapshots Pydantic| B[CollectionService]
     B -->|upsert por external_id| C[(servers / channels)]
     B -->|insert deduplicado| D[(server_metrics / channel_metrics)]
-    E[POST /api/v1/collection/run] --> B
+    R[CollectionRunner<br/>lock + estado] --> B
+    E[POST /api/v1/collection/run<br/>X-API-Key] --> R
+    S[CollectionScheduler<br/>opcional, cada 5 min] --> R
     F[CLI: python -m app.tasks.collect] --> B
+    ST[GET /api/v1/collection/status] -.lee.-> R
 ```
 
 1. El adaptador entrega cuatro colecciones: servidores, canales,
@@ -33,10 +36,46 @@ flowchart LR
 5. El resumen (`CollectionResult`) informa cuántos elementos se
    sincronizaron, insertaron, omitieron y qué errores hubo.
 
-No existe todavía un programador automático. Cuando se añada (cron del
-sistema, contenedor dedicado o scheduler in-process), invocará el mismo
-`CollectionService.run()` cada cinco minutos; el modelo de datos y la
-deduplicación ya están preparados para esa cadencia.
+### Exclusión mutua y estado observable
+
+Las recolecciones disparadas por HTTP y por el scheduler pasan por un
+único `CollectionRunner` por proceso (`app/collectors/runner.py`):
+
+- Un lock no bloqueante garantiza que **nunca** corren dos recolecciones
+  a la vez: la segunda petición HTTP recibe `409` y el ciclo del
+  scheduler que coincide con una ejecución manual se omite con un aviso
+  en el log.
+- El runner registra la última ejecución (inicio, fin, duración,
+  resultado o error), que `GET /api/v1/collection/status` expone junto
+  con el estado del scheduler (`enabled`, `interval_seconds`,
+  `next_run_at`).
+
+Este lock y este estado viven en memoria del proceso: son correctos para
+un despliegue de una sola instancia (el actual). Para réplicas múltiples
+el plan es sustituirlos por un lock a nivel de PostgreSQL
+(`pg_advisory_lock`) y persistir el historial de ejecuciones.
+
+### Programador periódico
+
+`CollectionScheduler` (`app/tasks/scheduler.py`) es un bucle asyncio
+dentro del proceso de la API, gestionado por el *lifespan* de FastAPI:
+
+- Deshabilitado por defecto; se activa con `SCHEDULER_ENABLED=true`.
+- Intervalo configurable con `COLLECTION_INTERVAL_SECONDS` (300 = cinco
+  minutos, mínimo 5).
+- La primera recolección ocurre un intervalo después del arranque.
+- Un fallo de recolección se registra y el bucle continúa.
+- Ejecuta la recolección en un hilo (`asyncio.to_thread`) para no
+  bloquear el event loop de la API.
+
+### Autenticación del endpoint interno
+
+`POST /api/v1/collection/run` exige la cabecera `X-API-Key` comparada en
+tiempo constante (`secrets.compare_digest`) contra `COLLECTION_API_KEY`.
+La política es *fail-closed*: sin clave configurada el endpoint responde
+`503` en vez de quedar abierto. La clave solo existe como variable de
+entorno; nunca se versiona ni se escribe en logs. Los endpoints GET de
+consulta permanecen abiertos por diseño (despliegue en red privada).
 
 ## Responsabilidad de cada capa
 
@@ -46,10 +85,10 @@ deduplicación ya están preparados para esa cadencia.
 | Dominio | `app/models` | Modelos ORM y enums (`ServerRole`, `ChannelStatus`) |
 | Acceso a datos | `app/database`, `app/repositories` | Motor, sesiones y consultas |
 | Adaptadores | `app/adapters` | Contrato con fuentes externas + mock |
-| Recolección | `app/collectors` | Orquestación adaptador → persistencia |
+| Recolección | `app/collectors` | Orquestación, lock de exclusión y estado |
 | Servicios | `app/services` | Agregaciones de negocio (overview) |
-| API HTTP | `app/api`, `app/schemas` | Endpoints y esquemas de respuesta |
-| Tareas | `app/tasks` | Comandos CLI reutilizables por el futuro scheduler |
+| API HTTP | `app/api`, `app/schemas` | Endpoints, auth por API key y esquemas |
+| Tareas | `app/tasks` | Comandos CLI y scheduler periódico opcional |
 
 Las capas solo dependen "hacia abajo": la API usa servicios y
 repositorios; los repositorios usan modelos; los adaptadores no conocen
