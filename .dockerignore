@@ -13,6 +13,11 @@ __pycache__
 .coverage
 htmlcov
 pgdata
+backups
+nginx/certs
+config/inventory.yaml
+config/inventory.yml
+config/inventory.json
 *.sqlite
 *.sqlite3
 *.db

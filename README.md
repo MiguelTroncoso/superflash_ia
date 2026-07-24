@@ -128,6 +128,10 @@ Servicios:
 Las credenciales por defecto son solo para desarrollo local; en
 cualquier entorno real defínelas en `.env` (nunca versionado).
 
+Para el despliegue en producción sobre Ubuntu 24.04 usa la guía
+[`docs/deployment.md`](docs/deployment.md), que incluye el Compose de
+producción, Nginx, backups, restauración, rollback y validaciones.
+
 ## Migraciones
 
 ```bash

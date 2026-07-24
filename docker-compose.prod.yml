@@ -1,0 +1,119 @@
+# SuperFlash Monitor: topología de producción para un único host Docker.
+#
+# El archivo .env.production se carga explícitamente desde los scripts de
+# operación. PostgreSQL y la API no publican puertos al host: Nginx es el
+# único punto de entrada.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER debe estar definido en .env.production}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD debe estar definido en .env.production}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB debe estar definido en .env.production}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  migrations:
+    build:
+      context: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    networks:
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+    # Excepción deliberada: es un job one-shot y no debe reiniciarse en bucle.
+    restart: "no"
+
+  api:
+    build:
+      context: .
+    expose:
+      - "8000"
+    environment:
+      APP_NAME: ${APP_NAME:-SuperFlash Monitor}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      MONITORING_ADAPTER: ${MONITORING_ADAPTER:-mock}
+      INFRASTRUCTURE_SOURCE: ${INFRASTRUCTURE_SOURCE:-mock}
+      STREAMING_SOURCE: ${STREAMING_SOURCE:-mock}
+      MOCK_SEED: ${MOCK_SEED:-42}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      API_KEY: ${API_KEY:?API_KEY debe estar definido en .env.production}
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      COLLECTION_INTERVAL_SECONDS: ${COLLECTION_INTERVAL_SECONDS:-300}
+      COLLECTION_TIMEOUT_SECONDS: ${COLLECTION_TIMEOUT_SECONDS:-600}
+      METRICS_RETENTION_DAYS: ${METRICS_RETENTION_DAYS:-}
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-}
+      PROMETHEUS_TIMEOUT_SECONDS: ${PROMETHEUS_TIMEOUT_SECONDS:-10}
+      PROMETHEUS_BEARER_TOKEN: ${PROMETHEUS_BEARER_TOKEN:-}
+      PROMETHEUS_TLS_VERIFY: ${PROMETHEUS_TLS_VERIFY:-true}
+      INFRASTRUCTURE_INVENTORY_FILE: ${INFRASTRUCTURE_INVENTORY_FILE:-}
+    volumes:
+      - ./config:/srv/app/config:ro
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json,sys,urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)); sys.exit(0 if data.get('status') == 'ok' else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      # Cuando HTTPS esté gestionado externamente, habilita también:
+      # - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # - ./nginx/certs:/etc/nginx/certs:ro
+    networks:
+      - frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/health | grep -q '\"status\":\"ok\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:

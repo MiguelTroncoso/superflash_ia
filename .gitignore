@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.production.example
 
 # Inventarios de infraestructura reales (solo se versiona el ejemplo)
 inventory.yaml
@@ -43,6 +44,8 @@ htmlcov/
 *.sqlite3
 *.db
 pgdata/
+backups/
+nginx/certs/
 
 # Archivos temporales y del sistema
 *.tmp

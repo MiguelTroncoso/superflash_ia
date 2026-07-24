@@ -1,0 +1,40 @@
+# Plantilla opcional para habilitar HTTPS cuando ya existan certificados.
+#
+# 1. Monta un directorio de certificados en /etc/nginx/certs:ro.
+# 2. Copia este archivo como https.conf.
+# 3. Cambia server_name por el dominio real.
+# 4. Añade un redirect de HTTP a HTTPS en default.conf.
+# 5. Ejecuta `docker compose ... up -d --force-recreate nginx` y valida.
+#
+# Este archivo termina en .example para que Nginx no lo cargue por accidente.
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name _;
+
+    ssl_certificate /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    location / {
+        limit_req zone=api_rate burst=20 nodelay;
+
+        proxy_pass http://superflash_api;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_buffering on;
+    }
+}
