@@ -4,14 +4,48 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, to_utc
 from app.api.pagination import NEXT_CURSOR_HEADER, decode_cursor, encode_cursor
 from app.repositories.server_repository import ServerRepository
-from app.schemas.server import ServerMetricRead, ServerRead
+from app.schemas.server import ServerCreate, ServerMetricRead, ServerRead, ServerUpdate
 
 router = APIRouter(prefix="/servers", tags=["servers"])
+
+
+def _inventory_fields(payload: ServerCreate | ServerUpdate) -> dict[str, object]:
+    """Traduce el contrato HTTP a los nombres del modelo ORM."""
+    fields = payload.model_dump(exclude_unset=isinstance(payload, ServerUpdate))
+    if "type" in fields:
+        fields["server_type"] = fields.pop("type")
+    if "network_speed_mbps" in fields:
+        fields["network_capacity_mbps"] = fields.pop("network_speed_mbps")
+    return fields
+
+
+def _server_response(server) -> ServerRead:
+    """Construye la respuesta sin devolver el token de Prometheus."""
+    return ServerRead.model_validate(server)
+
+
+@router.post("", response_model=ServerRead, status_code=status.HTTP_201_CREATED)
+def create_server(
+    payload: ServerCreate,
+    session: Annotated[Session, Depends(get_db)],
+) -> ServerRead:
+    """Registra un servidor en el inventario administrado."""
+    repository = ServerRepository(session)
+    if repository.get_by_external_id(payload.external_id) is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="external_id ya existe")
+    try:
+        server = repository.create(_inventory_fields(payload))
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="external_id ya existe")
+    return _server_response(server)
 
 
 @router.get("", response_model=list[ServerRead])
@@ -27,7 +61,44 @@ def get_server(server_id: int, session: Annotated[Session, Depends(get_db)]) -> 
     server = ServerRepository(session).get(server_id)
     if server is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Servidor no encontrado")
-    return ServerRead.model_validate(server)
+    return _server_response(server)
+
+
+@router.patch("/{server_id}", response_model=ServerRead)
+@router.put("/{server_id}", response_model=ServerRead)
+def update_server(
+    server_id: int,
+    payload: ServerUpdate,
+    session: Annotated[Session, Depends(get_db)],
+) -> ServerRead:
+    """Actualiza un servidor existente sin exponer credenciales."""
+    repository = ServerRepository(session)
+    server = repository.get(server_id)
+    if server is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Servidor no encontrado")
+    if "external_id" in payload.model_fields_set:
+        duplicate = repository.get_by_external_id(payload.external_id or "")
+        if duplicate is not None and duplicate.id != server_id:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="external_id ya existe")
+    try:
+        repository.update(server, _inventory_fields(payload))
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="external_id ya existe")
+    return _server_response(server)
+
+
+@router.delete("/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_server(server_id: int, session: Annotated[Session, Depends(get_db)]) -> Response:
+    """Elimina un servidor del inventario y su histórico asociado."""
+    repository = ServerRepository(session)
+    server = repository.get(server_id)
+    if server is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Servidor no encontrado")
+    repository.delete(server)
+    session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{server_id}/metrics", response_model=list[ServerMetricRead])

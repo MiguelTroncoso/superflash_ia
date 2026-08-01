@@ -29,6 +29,25 @@ class ServerRepository:
         stmt = select(Server).where(Server.external_id == external_id)
         return self._session.scalars(stmt).first()
 
+    def create(self, fields: dict[str, object]) -> Server:
+        """Crea un servidor administrado desde el inventario."""
+        server = Server(**fields)
+        self._session.add(server)
+        self._session.flush()
+        return server
+
+    def update(self, server: Server, fields: dict[str, object]) -> Server:
+        """Actualiza únicamente los campos enviados por el cliente."""
+        for name, value in fields.items():
+            setattr(server, name, value)
+        self._session.flush()
+        return server
+
+    def delete(self, server: Server) -> None:
+        """Elimina un servidor y sus métricas por la relación configurada."""
+        self._session.delete(server)
+        self._session.flush()
+
     def upsert_from_snapshot(self, snapshot: ServerSnapshot) -> Server:
         """Crea o actualiza un servidor identificado por ``external_id``."""
         server = self.get_by_external_id(snapshot.external_id)

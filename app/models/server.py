@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     String,
     UniqueConstraint,
     func,
@@ -34,6 +35,16 @@ class ServerRole(enum.StrEnum):
     OTHER = "other"
 
 
+class ServerOperationalStatus(enum.StrEnum):
+    """Estado operativo persistido del servidor."""
+
+    ONLINE = "online"
+    DEGRADED = "degraded"
+    OFFLINE = "offline"
+    UNKNOWN = "unknown"
+    MAINTENANCE = "maintenance"
+
+
 class Server(Base):
     """Servidor físico o virtual monitoreado."""
 
@@ -51,7 +62,27 @@ class Server(Base):
             values_callable=lambda e: [member.value for member in e],
         )
     )
+    provider: Mapped[str | None] = mapped_column(String(120), index=True)
+    datacenter: Mapped[str | None] = mapped_column(String(120), index=True)
+    group: Mapped[str | None] = mapped_column(String(120), index=True)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    server_type: Mapped[str | None] = mapped_column("type", String(80), index=True)
+    country: Mapped[str | None] = mapped_column(String(2), index=True)
     network_capacity_mbps: Mapped[float | None] = mapped_column(Float)
+    prometheus_url: Mapped[str | None] = mapped_column(String(500))
+    prometheus_token: Mapped[str | None] = mapped_column(String(1000))
+    heartbeat_interval_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[ServerOperationalStatus] = mapped_column(
+        Enum(
+            ServerOperationalStatus,
+            native_enum=False,
+            length=20,
+            values_callable=lambda e: [member.value for member in e],
+        ),
+        default=ServerOperationalStatus.UNKNOWN,
+    )
+    notes: Mapped[str | None] = mapped_column(String(2000))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -61,6 +92,11 @@ class Server(Base):
     metrics: Mapped[list["ServerMetric"]] = relationship(
         back_populates="server", cascade="all, delete-orphan", passive_deletes=True
     )
+
+    @property
+    def prometheus_configured(self) -> bool:
+        """Indica si existe una URL Prometheus configurada sin exponer el token."""
+        return bool(self.prometheus_url)
 
 
 class ServerMetric(Base):

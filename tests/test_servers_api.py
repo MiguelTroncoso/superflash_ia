@@ -88,3 +88,58 @@ def test_server_metrics_limit(client, session):
 
     invalid = client.get(f"/api/v1/servers/{server.id}/metrics", params={"limit": 0})
     assert invalid.status_code == 422
+
+
+def test_server_inventory_crud_does_not_return_prometheus_token(client):
+    """El inventario admite CRUD completo y nunca devuelve el token."""
+    payload = {
+        "external_id": "srv-crud",
+        "name": "Servidor administrado",
+        "hostname": "crud.example.internal",
+        "role": "live",
+        "provider": "Acme Cloud",
+        "datacenter": "SCL-1",
+        "group": "live",
+        "tags": ["production", "edge"],
+        "type": "bare-metal",
+        "country": "cl",
+        "network_speed_mbps": 1000,
+        "prometheus_url": "https://prometheus.internal",
+        "prometheus_token": "super-secret-token",
+        "heartbeat_interval_seconds": 120,
+        "status": "online",
+        "notes": "Servidor de prueba",
+    }
+
+    created = client.post("/api/v1/servers", json=payload)
+    assert created.status_code == 201
+    body = created.json()
+    server_id = body["id"]
+    assert body["country"] == "CL"
+    assert body["network_speed_mbps"] == 1000.0
+    assert body["prometheus_configured"] is True
+    assert "prometheus_token" not in body
+
+    updated = client.patch(
+        f"/api/v1/servers/{server_id}",
+        json={"name": "Servidor actualizado", "status": "degraded"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["name"] == "Servidor actualizado"
+    assert updated.json()["status"] == "degraded"
+
+    listed = client.get("/api/v1/servers")
+    assert listed.status_code == 200
+    assert any(item["id"] == server_id for item in listed.json())
+
+    deleted = client.delete(f"/api/v1/servers/{server_id}")
+    assert deleted.status_code == 204
+    assert client.get(f"/api/v1/servers/{server_id}").status_code == 404
+
+
+def test_server_inventory_rejects_duplicate_external_id(client):
+    """El identificador externo mantiene la unicidad del inventario."""
+    payload = {"external_id": "srv-duplicate", "name": "Uno"}
+    assert client.post("/api/v1/servers", json=payload).status_code == 201
+    duplicate = client.post("/api/v1/servers", json=payload)
+    assert duplicate.status_code == 409
