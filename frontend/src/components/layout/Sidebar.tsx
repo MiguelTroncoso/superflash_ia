@@ -1,5 +1,5 @@
 import { Bell, Gauge, LayoutDashboard, Radio, Server, Settings2, Sparkles, X } from 'lucide-react'
-import { NavLink } from 'react-router-dom'
+import { NavLink } from 'react-router'
 import brandMark from '../../assets/brand-mark.svg'
 import { useUiStore } from '../../store/uiStore'
 import { cn } from '../../utils/formatters'

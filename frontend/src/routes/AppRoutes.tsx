@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes } from 'react-router'
 import { MonitorLayout } from '../layouts/MonitorLayout'
 
 const ChannelsPage = lazy(() =>
