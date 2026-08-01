@@ -100,7 +100,6 @@ describe('dashboardMetrics', () => {
   })
 
   it('derives summary values without inventing disk data', () => {
-    const rows = mapServerRows([{ ...server, latest_metric: null, network_utilization_percent: null, active_alert_count: 0, last_updated_at: server.updated_at }], { generated_at: '', alerts: [] })
     const collectionStatus = {
       running: false,
       run_id: 2,

@@ -14,11 +14,11 @@ describe('ChannelsPage', () => {
   it('renders live channel rows and does not invent missing samples', () => {
     channelsMock.mockReturnValue({
       rows: [{
-        channel: { id: 1, external_id: 'ch-1', name: 'News', category: 'News', current_server_id: 2, enabled: true, created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-01T10:00:00Z' },
+        channel: { id: 1, external_id: 'ch-1', name: 'News', category: 'News', current_server_id: 2, enabled: true, created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-01T10:00:00Z', current_server_name: 'Server 2', latest_metric: null, viewers: null, bitrate_mbps: null, estimated_output_mbps: null, status: null, last_updated_at: null },
         metric: { id: 2, channel_id: 1, server_id: 2, collected_at: '2026-08-01T10:00:00Z', viewers: 1200, bitrate_mbps: 4.5, estimated_output_mbps: 5, status: 'online' },
         state: 'healthy',
       }, {
-        channel: { id: 2, external_id: 'ch-2', name: 'Sports', category: null, current_server_id: null, enabled: true, created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-01T10:00:00Z' },
+        channel: { id: 2, external_id: 'ch-2', name: 'Sports', category: null, current_server_id: null, enabled: true, created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-01T10:00:00Z', current_server_name: null, latest_metric: null, viewers: null, bitrate_mbps: null, estimated_output_mbps: null, status: null, last_updated_at: null },
         metric: null,
         state: 'warning',
       }],
