@@ -1,55 +1,56 @@
-import { useQueries, useQuery } from '@tanstack/react-query'
-import { apiService } from '../services/apiService'
-import type { ChannelMetricResponse, ChannelResponse } from '../types/api'
+import { useQuery } from '@tanstack/react-query'
+import { apiService, type ChannelListParams } from '../services/apiService'
+import type { ChannelListItem, ChannelMetricResponse } from '../types/api'
 import type { HealthState } from '../types/monitoring'
 
 export interface ChannelTableRow {
-  channel: ChannelResponse
+  channel: ChannelListItem
   metric: ChannelMetricResponse | null
   state: HealthState
 }
 
-export function useChannelsData(): {
+export interface ChannelsData {
   rows: ChannelTableRow[]
+  page: number
+  pageSize: number
+  total: number
+  totalPages: number
   isLoading: boolean
   isError: boolean
   isFetching: boolean
   isStale: boolean
   lastUpdatedAt: number
   refetch: () => Promise<void>
-} {
-  const channelsQuery = useQuery({
-    queryKey: ['channels'],
-    queryFn: apiService.getChannels,
+}
+
+export function useChannelsData(params: ChannelListParams = {}): ChannelsData {
+  const query = useQuery({
+    queryKey: ['channels', params],
+    queryFn: () => apiService.getChannels(params),
     staleTime: 30_000,
     refetchInterval: 60_000,
     retry: 1,
   })
-  const channels = channelsQuery.data ?? []
-  const metricQueries = useQueries({
-    queries: channels.map((channel) => ({
-      queryKey: ['channels', channel.id, 'latest-metric'],
-      queryFn: () => apiService.getChannelMetrics(channel.id),
-      staleTime: 30_000,
-      refetchInterval: 60_000,
-      retry: 1,
-    })),
-  })
-  const rows = channels.map((channel, index) => {
-    const metric = metricQueries[index]?.data?.[0] ?? null
-    return { channel, metric, state: channelState(channel.enabled, metric) }
-  })
-  const queries = [channelsQuery, ...metricQueries]
+  const page = query.data
+  const rows = (page?.items ?? []).map((channel) => ({
+    channel,
+    metric: channel.latest_metric,
+    state: channelState(channel.enabled, channel.latest_metric),
+  }))
 
   return {
     rows,
-    isLoading: queries.some((query) => query.isPending),
-    isError: queries.some((query) => query.isError),
-    isFetching: queries.some((query) => query.isFetching),
-    isStale: queries.some((query) => query.isStale),
-    lastUpdatedAt: Math.max(...queries.map((query) => query.dataUpdatedAt), 0),
+    page: page?.page ?? params.page ?? 1,
+    pageSize: page?.page_size ?? params.page_size ?? 50,
+    total: page?.total ?? 0,
+    totalPages: page?.total_pages ?? 0,
+    isLoading: query.isPending,
+    isError: query.isError,
+    isFetching: query.isFetching,
+    isStale: query.isStale,
+    lastUpdatedAt: query.dataUpdatedAt,
     refetch: async () => {
-      await Promise.all(queries.map((query) => query.refetch()))
+      await query.refetch()
     },
   }
 }

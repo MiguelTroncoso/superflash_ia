@@ -3,30 +3,58 @@ import type {
   AlertsResponse,
   BalanceResponse,
   ChannelMetricResponse,
-  ChannelResponse,
+  ChannelPageResponse,
   CollectionStatusResponse,
   HealthResponse,
   OverviewResponse,
   ServerMetricResponse,
+  ServerPageResponse,
   ServerResponse,
   RecommendationsResponse,
 } from '../types/api'
 
 const API_V1_PREFIX = '/api/v1'
 
-async function getData<T>(path: string, params?: Record<string, number>): Promise<T> {
+type QueryParams = Record<string, boolean | number | string | undefined>
+
+export interface ServerListParams extends QueryParams {
+  page?: number
+  page_size?: number
+  search?: string
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
+  status?: string
+  provider?: string
+  group?: string
+  enabled?: boolean
+}
+
+export interface ChannelListParams extends QueryParams {
+  page?: number
+  page_size?: number
+  search?: string
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
+  server_id?: number
+  category?: string
+  enabled?: boolean
+}
+
+async function getData<T>(path: string, params?: QueryParams): Promise<T> {
   const response = await httpClient.get<T>(path, params ? { params } : undefined)
   return response.data
 }
 
 export const apiService = {
   getOverview: (): Promise<OverviewResponse> => getData(`${API_V1_PREFIX}/overview`),
-  getServers: (): Promise<ServerResponse[]> => getData(`${API_V1_PREFIX}/servers`),
+  getServers: (params?: ServerListParams): Promise<ServerPageResponse> =>
+    getData(`${API_V1_PREFIX}/servers`, params),
   getServer: (serverId: number): Promise<ServerResponse> =>
     getData(`${API_V1_PREFIX}/servers/${serverId}`),
   getServerMetrics: (serverId: number, limit = 1): Promise<ServerMetricResponse[]> =>
     getData(`${API_V1_PREFIX}/servers/${serverId}/metrics`, { limit }),
-  getChannels: (): Promise<ChannelResponse[]> => getData(`${API_V1_PREFIX}/channels`),
+  getChannels: (params?: ChannelListParams): Promise<ChannelPageResponse> =>
+    getData(`${API_V1_PREFIX}/channels`, params),
   getChannelMetrics: (channelId: number, limit = 1): Promise<ChannelMetricResponse[]> =>
     getData(`${API_V1_PREFIX}/channels/${channelId}/metrics`, { limit }),
   getAlerts: (): Promise<AlertsResponse> => getData(`${API_V1_PREFIX}/alerts`),

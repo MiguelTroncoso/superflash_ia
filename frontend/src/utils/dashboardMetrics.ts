@@ -1,11 +1,9 @@
 import type {
-  AlertResponse,
   AlertsResponse,
   CollectionStatusResponse,
   HealthResponse,
   OverviewResponse,
-  ServerMetricResponse,
-  ServerResponse,
+  ServerListItem,
 } from '../types/api'
 import type { HealthState } from '../types/monitoring'
 
@@ -46,32 +44,23 @@ export interface DashboardHistoryPoint {
   outbound: number
 }
 
-function average(values: Array<number | null>): number | null {
-  const validValues = values.filter((value): value is number => value !== null)
-  if (validValues.length === 0) return null
-  return validValues.reduce((total, value) => total + value, 0) / validValues.length
-}
-
-function serverState(
-  metric: ServerMetricResponse | undefined,
-  serverAlerts: AlertResponse[],
-): Pick<DashboardServerRow, 'state' | 'stateLabel'> {
-  if (!metric) return { state: 'warning', stateLabel: 'No sample' }
-  if (serverAlerts.length > 0) return { state: 'warning', stateLabel: 'Attention' }
+function serverState(server: ServerListItem, hasAlert: boolean): Pick<DashboardServerRow, 'state' | 'stateLabel'> {
+  if (server.status === 'offline') return { state: 'critical', stateLabel: 'Offline' }
+  if (hasAlert) return { state: 'warning', stateLabel: 'Attention' }
+  if (!server.latest_metric) return { state: 'warning', stateLabel: 'No sample' }
   return { state: 'healthy', stateLabel: 'Healthy' }
 }
 
 export function mapServerRows(
-  servers: ServerResponse[],
-  latestMetrics: ReadonlyMap<number, ServerMetricResponse | undefined>,
+  servers: ServerListItem[],
   alerts: AlertsResponse,
 ): DashboardServerRow[] {
   return servers
     .filter((server) => server.enabled)
     .map((server) => {
-      const metric = latestMetrics.get(server.id)
-      const serverAlerts = alerts.alerts.filter((alert) => alert.server_id === server.id)
-      const state = serverState(metric, serverAlerts)
+      const metric = server.latest_metric
+      const hasAlert = server.active_alert_count > 0 || alerts.alerts.some((alert) => alert.server_id === server.id)
+      const state = serverState(server, hasAlert)
 
       return {
         id: server.id,
@@ -91,8 +80,6 @@ export function mapServerRows(
 
 export function buildDashboardSummary(
   overview: OverviewResponse,
-  channels: { length: number },
-  rows: DashboardServerRow[],
   alerts: AlertsResponse,
   health: HealthResponse,
   collectionStatus: CollectionStatusResponse,
@@ -108,10 +95,10 @@ export function buildDashboardSummary(
 
   return {
     serverCount: overview.enabled_servers,
-    channelCount: channels.length,
+    channelCount: overview.channel_count,
     avgCpuPercent: overview.avg_cpu_percent,
     avgMemoryPercent: overview.avg_memory_percent,
-    avgDiskPercent: average(rows.map((row) => row.diskPercent)),
+    avgDiskPercent: overview.avg_disk_percent,
     totalInputMbps: overview.total_input_mbps,
     totalOutputMbps: overview.total_output_mbps,
     alertCount: alerts.alerts.length,
@@ -126,26 +113,15 @@ export function hasMetricSamples(rows: DashboardServerRow[]): boolean {
 }
 
 export function buildDashboardHistory(
-  histories: ReadonlyMap<number, ServerMetricResponse[]>,
+  history: OverviewResponse['history'],
 ): DashboardHistoryPoint[] {
-  const buckets = new Map<string, ServerMetricResponse[]>()
-  histories.forEach((metrics) => {
-    metrics.forEach((metric) => {
-      const bucket = buckets.get(metric.collected_at) ?? []
-      bucket.push(metric)
-      buckets.set(metric.collected_at, bucket)
-    })
-  })
-
-  return [...buckets.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([timestamp, metrics]) => ({
-      time: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      cpu: average(metrics.map((metric) => metric.cpu_percent)) ?? 0,
-      memory: average(metrics.map((metric) => metric.memory_percent)) ?? 0,
-      inbound: round(metrics.reduce((total, metric) => total + metric.input_mbps, 0)),
-      outbound: round(metrics.reduce((total, metric) => total + metric.output_mbps, 0)),
-    }))
+  return history.map((point) => ({
+    time: new Date(point.collected_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    cpu: point.avg_cpu_percent ?? 0,
+    memory: point.avg_memory_percent ?? 0,
+    inbound: round(point.total_input_mbps),
+    outbound: round(point.total_output_mbps),
+  }))
 }
 
 function round(value: number): number {

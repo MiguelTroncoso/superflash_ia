@@ -30,6 +30,8 @@ export interface OverviewResponse {
   total_input_mbps: number
   avg_cpu_percent: number | null
   avg_memory_percent: number | null
+  avg_disk_percent: number | null
+  channel_count: number
   top_output_server: {
     server_id: number
     name: string
@@ -47,6 +49,14 @@ export interface OverviewResponse {
     name: string
     viewers: number
     collected_at: string
+  }>
+  history: Array<{
+    collected_at: string
+    avg_cpu_percent: number | null
+    avg_memory_percent: number | null
+    avg_disk_percent: number | null
+    total_input_mbps: number
+    total_output_mbps: number
   }>
 }
 
@@ -96,6 +106,21 @@ export interface ServerMetricResponse {
   source: string
 }
 
+export interface ServerListItem extends ServerResponse {
+  latest_metric: ServerMetricResponse | null
+  network_utilization_percent: number | null
+  active_alert_count: number
+  last_updated_at: string | null
+}
+
+export interface ServerPageResponse {
+  items: ServerListItem[]
+  page: number
+  page_size: number
+  total: number
+  total_pages: number
+}
+
 export interface ChannelResponse {
   id: number
   external_id: string
@@ -116,6 +141,24 @@ export interface ChannelMetricResponse {
   bitrate_mbps: number | null
   estimated_output_mbps: number | null
   status: 'online' | 'degraded' | 'offline' | 'unknown'
+}
+
+export interface ChannelListItem extends ChannelResponse {
+  current_server_name: string | null
+  latest_metric: ChannelMetricResponse | null
+  viewers: number | null
+  bitrate_mbps: number | null
+  estimated_output_mbps: number | null
+  status: 'online' | 'degraded' | 'offline' | 'unknown' | null
+  last_updated_at: string | null
+}
+
+export interface ChannelPageResponse {
+  items: ChannelListItem[]
+  page: number
+  page_size: number
+  total: number
+  total_pages: number
 }
 
 export interface AlertResponse {

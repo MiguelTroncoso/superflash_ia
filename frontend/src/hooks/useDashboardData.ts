@@ -1,12 +1,11 @@
-import { useQueries, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { apiService } from '../services/apiService'
 import type {
   AlertsResponse,
   CollectionStatusResponse,
   HealthResponse,
   OverviewResponse,
-  ServerMetricResponse,
-  ServerResponse,
+  ServerPageResponse,
 } from '../types/api'
 import {
   buildDashboardSummary,
@@ -47,14 +46,9 @@ export function useDashboardData(): DashboardData {
     queryFn: apiService.getOverview,
     ...queryOptions,
   })
-  const serversQuery = useQuery<ServerResponse[]>({
+  const serversQuery = useQuery<ServerPageResponse>({
     queryKey: ['dashboard', 'servers'],
-    queryFn: apiService.getServers,
-    ...queryOptions,
-  })
-  const channelsQuery = useQuery({
-    queryKey: ['dashboard', 'channels'],
-    queryFn: apiService.getChannels,
+    queryFn: () => apiService.getServers({ page: 1, page_size: 200, enabled: true }),
     ...queryOptions,
   })
   const alertsQuery = useQuery<AlertsResponse>({
@@ -73,57 +67,29 @@ export function useDashboardData(): DashboardData {
     ...queryOptions,
   })
 
-  const enabledServers = (serversQuery.data ?? []).filter((server) => server.enabled)
-  const metricQueries = useQueries({
-    queries: enabledServers.map((server) => ({
-      queryKey: ['dashboard', 'server-metrics', server.id, 'history'],
-      queryFn: () => apiService.getServerMetrics(server.id, 24),
-      ...queryOptions,
-    })),
-  })
-  const queries = [
-    overviewQuery,
-    serversQuery,
-    channelsQuery,
-    alertsQuery,
-    collectionQuery,
-    healthQuery,
-    ...metricQueries,
-  ]
+  const queries = [overviewQuery, serversQuery, alertsQuery, collectionQuery, healthQuery]
   const isLoading = queries.some((query) => query.isPending)
   const isError = queries.some((query) => query.isError)
   const isFetching = queries.some((query) => query.isFetching)
   const isStale = queries.some((query) => query.isStale)
   const error = queries.find((query) => query.isError)?.error ?? null
   const lastUpdatedAt = Math.max(...queries.map((query) => query.dataUpdatedAt), 0)
-  const latestMetrics = new Map<number, ServerMetricResponse | undefined>()
-  const histories = new Map<number, ServerMetricResponse[]>()
-
-  enabledServers.forEach((server, index) => {
-    latestMetrics.set(server.id, metricQueries[index]?.data?.[0])
-    histories.set(server.id, metricQueries[index]?.data ?? [])
-  })
-
-  const rows =
-    serversQuery.data && alertsQuery.data
-      ? mapServerRows(serversQuery.data, latestMetrics, alertsQuery.data)
-      : []
+  const alerts = alertsQuery.data ?? { generated_at: '', alerts: [] }
+  const rows = serversQuery.data ? mapServerRows(serversQuery.data.items, alerts) : []
   const dataReady =
     !isLoading &&
     !isError &&
     overviewQuery.data !== undefined &&
-    channelsQuery.data !== undefined &&
+    serversQuery.data !== undefined &&
     alertsQuery.data !== undefined &&
     collectionQuery.data !== undefined &&
     healthQuery.data !== undefined
   const summary = dataReady
     ? buildDashboardSummary(
-        overviewQuery.data,
-        channelsQuery.data,
-        rows,
-        alertsQuery.data,
-        healthQuery.data,
-        collectionQuery.data,
+        overviewQuery.data!,
+        alertsQuery.data!,
+        healthQuery.data!,
+        collectionQuery.data!,
       )
     : null
   const isEmpty = Boolean(dataReady && (!rows.length || !hasMetricSamples(rows)))
@@ -145,7 +111,7 @@ export function useDashboardData(): DashboardData {
     alerts: alertsQuery.data?.alerts ?? [],
     health: healthQuery.data ?? null,
     collectionStatus: collectionQuery.data ?? null,
-    history: buildDashboardHistory(histories),
+    history: buildDashboardHistory(overviewQuery.data?.history ?? []),
     refetch,
   }
 }

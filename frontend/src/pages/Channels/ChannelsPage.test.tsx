@@ -22,6 +22,7 @@ describe('ChannelsPage', () => {
         metric: null,
         state: 'warning',
       }],
+      page: 1, pageSize: 50, total: 2, totalPages: 1,
       isLoading: false, isError: false, isFetching: false, isStale: false, lastUpdatedAt: 0, refetch: vi.fn().mockResolvedValue(undefined),
     })
 
@@ -33,7 +34,7 @@ describe('ChannelsPage', () => {
   })
 
   it('renders the explicit empty API state', () => {
-    channelsMock.mockReturnValue({ rows: [], isLoading: false, isError: false, isFetching: false, isStale: false, lastUpdatedAt: 0, refetch: vi.fn().mockResolvedValue(undefined) })
+    channelsMock.mockReturnValue({ rows: [], page: 1, pageSize: 50, total: 0, totalPages: 0, isLoading: false, isError: false, isFetching: false, isStale: false, lastUpdatedAt: 0, refetch: vi.fn().mockResolvedValue(undefined) })
     render(<ChannelsPage />)
     expect(screen.getByText('No monitoring data available')).toBeInTheDocument()
   })

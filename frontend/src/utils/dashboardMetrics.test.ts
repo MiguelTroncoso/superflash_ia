@@ -34,9 +34,12 @@ const overview: OverviewResponse = {
   total_input_mbps: 22,
   avg_cpu_percent: 62,
   avg_memory_percent: 71,
+  avg_disk_percent: null,
+  channel_count: 3,
   top_output_server: { server_id: 1, name: server.name, output_mbps: 140 },
   server_network_utilization: [],
   top_channels: [],
+  history: [],
 }
 
 const alerts: AlertsResponse = {
@@ -65,36 +68,27 @@ const health: HealthResponse = { status: 'ok', database: 'ok', version: '0.1.0' 
 
 describe('dashboardMetrics', () => {
   it('maps latest API metrics and marks alerted servers', () => {
-    const rows = mapServerRows(
-      [server],
-      new Map([
-        [
-          1,
-          {
-            id: 11,
-            server_id: 1,
-            collected_at: '2026-08-01T10:00:00Z',
-            cpu_percent: 92,
-            memory_percent: 71,
-            disk_percent: 44,
-            filesystem_percent: 44,
-            swap_percent: 18,
-            input_mbps: 22,
-            output_mbps: 140,
-            io_read_mbps: 42,
-            io_write_mbps: 21,
-            load_average_1m: 1.2,
-            load_average_5m: 1,
-            load_average_15m: 0.8,
-            active_connections: 12,
-            active_streams: 3,
-            uptime_seconds: 100,
-            source: 'mock',
-          },
-        ],
-      ]),
-      alerts,
-    )
+    const rows = mapServerRows([{ ...server, latest_metric: {
+      id: 11,
+      server_id: 1,
+      collected_at: '2026-08-01T10:00:00Z',
+      cpu_percent: 92,
+      memory_percent: 71,
+      disk_percent: 44,
+      filesystem_percent: 44,
+      swap_percent: 18,
+      input_mbps: 22,
+      output_mbps: 140,
+      io_read_mbps: 42,
+      io_write_mbps: 21,
+      load_average_1m: 1.2,
+      load_average_5m: 1,
+      load_average_15m: 0.8,
+      active_connections: 12,
+      active_streams: 3,
+      uptime_seconds: 100,
+      source: 'mock',
+    }, network_utilization_percent: 14, active_alert_count: 1, last_updated_at: '2026-08-01T10:00:00Z' }], alerts)
 
     expect(rows[0]).toMatchObject({
       name: 'sf-core-01',
@@ -106,7 +100,7 @@ describe('dashboardMetrics', () => {
   })
 
   it('derives summary values without inventing disk data', () => {
-    const rows = mapServerRows([server], new Map(), { generated_at: '', alerts: [] })
+    const rows = mapServerRows([{ ...server, latest_metric: null, network_utilization_percent: null, active_alert_count: 0, last_updated_at: server.updated_at }], { generated_at: '', alerts: [] })
     const collectionStatus = {
       running: false,
       run_id: 2,
@@ -125,8 +119,6 @@ describe('dashboardMetrics', () => {
 
     const summary = buildDashboardSummary(
       overview,
-      { length: 3 },
-      rows,
       { generated_at: '', alerts: [] },
       health,
       collectionStatus,
@@ -148,8 +140,6 @@ describe('dashboardMetrics', () => {
   it('degrades the general status when active alerts exist', () => {
     const summary = buildDashboardSummary(
       overview,
-      { length: 3 },
-      [],
       alerts,
       health,
       {

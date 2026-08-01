@@ -7,7 +7,7 @@ import { Surface } from '../../components/common/Surface'
 import { DashboardFreshness } from '../../components/dashboard/DashboardFreshness'
 import { DashboardState } from '../../components/dashboard/DashboardState'
 import { usePageTitle } from '../../hooks/usePageTitle'
-import { useServersData, type ServerTableRow } from '../../hooks/useServersData'
+import { useServersData } from '../../hooks/useServersData'
 import { formatNullablePercent, formatNullableThroughput, formatUptime } from '../../utils/formatters'
 
 type SortKey = 'status' | 'name' | 'cpu' | 'memory' | 'disk' | 'network' | 'uptime' | 'group' | 'provider' | 'country'
@@ -16,7 +16,6 @@ const PAGE_SIZE = 10
 
 export function ServersPage(): React.JSX.Element {
   usePageTitle('Servers')
-  const data = useServersData()
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('all')
   const [provider, setProvider] = useState('all')
@@ -24,28 +23,24 @@ export function ServersPage(): React.JSX.Element {
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [ascending, setAscending] = useState(true)
   const [page, setPage] = useState(1)
+  const data = useServersData({
+    page,
+    page_size: PAGE_SIZE,
+    search: search.trim() || undefined,
+    status: status === 'all' ? undefined : status,
+    provider: provider === 'all' ? undefined : provider,
+    group: group === 'all' ? undefined : group,
+    sort_by: sortKey,
+    sort_order: ascending ? 'asc' : 'desc',
+  })
 
   const providers = useMemo(
     () => unique(data.rows.map(({ server }) => server.provider)),
     [data.rows],
   )
   const groups = useMemo(() => unique(data.rows.map(({ server }) => server.group)), [data.rows])
-  const filteredRows = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase()
-    return [...data.rows]
-      .filter(({ server }) => status === 'all' || server.status === status)
-      .filter(({ server }) => provider === 'all' || server.provider === provider)
-      .filter(({ server }) => group === 'all' || server.group === group)
-      .filter(({ server }) => {
-        if (!normalizedSearch) return true
-        return [server.name, server.hostname, server.external_id, server.country]
-          .filter(Boolean)
-          .some((value) => value!.toLowerCase().includes(normalizedSearch))
-      })
-      .sort((left, right) => compareRows(left, right, sortKey) * (ascending ? 1 : -1))
-  }, [ascending, data.rows, group, provider, search, sortKey, status])
-  const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE))
-  const visibleRows = filteredRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const pageCount = Math.max(1, data.totalPages)
+  const visibleRows = data.rows
 
   useEffect(() => {
     setPage(1)
@@ -130,10 +125,10 @@ export function ServersPage(): React.JSX.Element {
           {visibleRows.length === 0 && <p className="p-8 text-center text-xs text-muted">No servers match the current filters.</p>}
         </div>
         <div className="flex items-center justify-between border-t border-line px-5 py-3 text-xs text-muted">
-          <span>{filteredRows.length} servers · page {page} of {pageCount}</span>
+          <span>{data.total} servers · page {data.page} of {pageCount}</span>
           <div className="flex gap-2">
-            <button disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-lg border border-line px-3 py-1.5 disabled:opacity-40">Previous</button>
-            <button disabled={page >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))} className="rounded-lg border border-line px-3 py-1.5 disabled:opacity-40">Next</button>
+            <button disabled={data.page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-lg border border-line px-3 py-1.5 disabled:opacity-40">Previous</button>
+            <button disabled={data.page >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))} className="rounded-lg border border-line px-3 py-1.5 disabled:opacity-40">Next</button>
           </div>
         </div>
       </Surface>
@@ -152,25 +147,6 @@ export function ServersPage(): React.JSX.Element {
 
 function unique(values: Array<string | null>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))].sort()
-}
-
-function compareRows(left: ServerTableRow, right: ServerTableRow, key: SortKey): number {
-  const values: Record<SortKey, [string | number, string | number]> = {
-    status: [left.server.status, right.server.status],
-    name: [left.server.name, right.server.name],
-    cpu: [left.metric?.cpu_percent ?? -1, right.metric?.cpu_percent ?? -1],
-    memory: [left.metric?.memory_percent ?? -1, right.metric?.memory_percent ?? -1],
-    disk: [left.metric?.disk_percent ?? -1, right.metric?.disk_percent ?? -1],
-    network: [left.metric?.output_mbps ?? -1, right.metric?.output_mbps ?? -1],
-    uptime: [left.metric?.uptime_seconds ?? -1, right.metric?.uptime_seconds ?? -1],
-    group: [left.server.group ?? '', right.server.group ?? ''],
-    provider: [left.server.provider ?? '', right.server.provider ?? ''],
-    country: [left.server.country ?? '', right.server.country ?? ''],
-  }
-  const [leftValue, rightValue] = values[key]
-  return typeof leftValue === 'number' && typeof rightValue === 'number'
-    ? leftValue - rightValue
-    : String(leftValue).localeCompare(String(rightValue))
 }
 
 function FilterSelect({ value, onChange, options, label }: { value: string; onChange: (value: string) => void; options: string[]; label: string }): React.JSX.Element {
