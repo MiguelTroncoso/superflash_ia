@@ -118,4 +118,32 @@ describe('dashboardMetrics', () => {
       generalState: 'healthy',
     })
   })
+
+  it('degrades the general status when active alerts exist', () => {
+    const summary = buildDashboardSummary(
+      overview,
+      { length: 3 },
+      [],
+      alerts,
+      health,
+      {
+        running: false,
+        run_id: null,
+        source: null,
+        triggered_by: null,
+        started_at: null,
+        heartbeat_at: null,
+        finished_at: null,
+        duration_ms: null,
+        status: 'success',
+        errors: [],
+        inserted: 1,
+        skipped: 0,
+        next_run_at: null,
+      },
+    )
+
+    expect(summary.generalState).toBe('warning')
+    expect(summary.generalLabel).toBe('Degraded')
+  })
 })

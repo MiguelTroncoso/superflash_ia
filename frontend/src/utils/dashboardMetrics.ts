@@ -94,7 +94,9 @@ export function buildDashboardSummary(
     ? `Last collection ${new Date(collectionTimestamp).toLocaleString()}`
     : 'No collection recorded'
   const generalState: HealthState =
-    health.status === 'ok' && collectionStatus.status !== 'error' ? 'healthy' : 'warning'
+    health.status === 'ok' && collectionStatus.status !== 'error' && alerts.alerts.length === 0
+      ? 'healthy'
+      : 'warning'
 
   return {
     serverCount: overview.enabled_servers,
