@@ -71,7 +71,7 @@ export function Sidebar({ isCollapsed }: SidebarProps): React.JSX.Element {
           >
             Operations
           </p>
-          {navItems.map(({ label, path, icon: Icon, count }) => (
+          {navItems.map(({ label, path, icon: Icon }) => (
             <NavLink
               key={path}
               to={path}
@@ -96,11 +96,6 @@ export function Sidebar({ isCollapsed }: SidebarProps): React.JSX.Element {
               >
                 {label}
               </span>
-              {count && !isCollapsed && (
-                <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-bold text-warning">
-                  {count}
-                </span>
-              )}
             </NavLink>
           ))}
         </nav>

@@ -1,122 +1,115 @@
 # SuperFlash Monitor Frontend
 
-Frontend del SuperFlash Monitor. El dashboard consume los contratos de lectura
-de FastAPI a través de Nginx; solo los gráficos históricos y la actividad
-reciente permanecen simulados porque todavía no existe un endpoint adecuado.
+Frontend del SuperFlash Monitor. La aplicación consume los contratos de
+lectura de FastAPI mediante Axios y TanStack Query a través del mismo origen
+servido por Nginx. No contiene credenciales ni ejecuta acciones sobre la
+infraestructura monitoreada.
 
 ## Tecnologías
 
-- React 19 + TypeScript.
-- Vite para desarrollo y build.
-- React Router para navegación local.
-- TanStack Query para cache, estados de carga, errores y datos stale.
-- Axios encapsulado en `services/apiService.ts` y `services/httpClient.ts`.
-- Zustand para estado de UI.
-- TailwindCSS 4 para estilos.
-- Recharts para gráficos mock.
-- Lucide React para iconografía.
+- React 19 + TypeScript + Vite.
+- React Router para navegación SPA.
+- TanStack Query para cache, refresh, loading, error y stale state.
+- Axios para HTTP y Zustand para estado de UI.
+- TailwindCSS 4, Recharts y Lucide React.
 
 ## Ejecutar localmente
 
-Desde la raíz del repositorio:
-
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-Vite mostrará la URL local, normalmente `http://localhost:5173`.
-
-Para validar el build estático y las pruebas:
+Para validar la aplicación:
 
 ```bash
 npm run typecheck
-npm run build
 npm test
+npm run build
 npm run test:security
 npm run preview
 ```
 
-El Dockerfile construye la imagen estática del frontend. El runtime usa Nginx
-interno con fallback SPA mediante `try_files`, pero no ejecuta Vite en modo
-desarrollo:
+El Dockerfile produce `dist/` y el runtime sirve únicamente Nginx; no ejecuta
+Vite en modo desarrollo:
 
 ```bash
 docker build -t superflash-monitor-frontend ./frontend
 docker run --rm -p 8080:80 superflash-monitor-frontend
 ```
 
-En producción, el servicio se integra mediante `docker-compose.prod.yml`. El
-navegador llama al mismo origen (`/api/v1/...`) y nunca conoce `API_KEY`.
-Nginx recibe la clave como Docker secret desde la variable `API_KEY` del
-servidor, renderiza su configuración al iniciar y la añade únicamente hacia
-FastAPI. `/health` permanece público.
+## API y secreto `X-API-Key`
 
-Configura la clave solo en el servidor, por ejemplo en un `.env.production`
-fuera del repositorio:
+El navegador llama siempre a `/api/v1/...` en el mismo origen. No se configura
+`API_KEY`, `VITE_API_KEY` ni ningún secreto en React, HTML, source maps o el
+bundle. Nginx agrega `X-API-Key` solo en el proxy hacia FastAPI usando el
+Docker secret disponible en el servidor. `/health` permanece público.
+
+En producción, configura la clave fuera del repositorio, por ejemplo en
+`.env.production` con permisos restringidos:
 
 ```dotenv
 API_KEY=una-clave-larga-generada-en-el-servidor
 ```
 
-Luego inicia el stack con:
+El stack se inicia con:
 
 ```bash
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
 ```
 
-No coloques `API_KEY` en `frontend/`, `VITE_*`, HTML, source maps ni código
-TypeScript.
+La clave tampoco debe colocarse en `frontend/`, `VITE_*`, archivos de test
+versionados ni logs. El script `npm run test:security` inspecciona el bundle.
 
 ## Estructura
 
 ```text
 frontend/
 ├── Dockerfile
-├── index.html
-├── package.json
 ├── src/
-│   ├── app/                 # Composición de providers y aplicación raíz
-│   ├── assets/              # Marca y recursos estáticos
-│   ├── components/
-│   │   ├── charts/          # Gráficos Recharts
-│   │   ├── common/          # Primitivas visuales reutilizables
-│   │   ├── dashboard/       # Bloques propios del dashboard
-│   │   ├── layout/          # Sidebar y topbar
-│   │   └── tables/          # Tablas de salud del dashboard
-│   ├── hooks/               # Hooks de presentación
-│   ├── layouts/             # Layouts de página
-│   ├── pages/               # Dashboard, Servers, Channels, Alerts, Settings
-│   ├── routes/              # Mapa de rutas React Router
-│   ├── services/            # Cliente HTTP y servicios tipados de lectura
-│   ├── store/               # Estado global de UI con Zustand
-│   ├── styles/              # Tailwind y tokens visuales
-│   ├── types/               # Contratos TypeScript
-│   └── utils/               # Formateadores y datos ficticios
+│   ├── app/                 # providers y aplicación raíz
+│   ├── assets/              # marca y recursos estáticos
+│   ├── components/          # common, dashboard, charts, layout y tables
+│   ├── hooks/               # TanStack Query y hooks de presentación
+│   ├── layouts/             # layout operativo
+│   ├── pages/               # Dashboard, Servers, Channels, Alerts, Balance,
+│   │                        # Recommendations y Settings
+│   ├── routes/              # React Router
+│   ├── services/            # Axios y servicios tipados
+│   ├── store/               # estado de UI con Zustand
+│   ├── styles/              # tokens y Tailwind
+│   ├── types/               # contratos TypeScript
+│   └── utils/               # mapeos y formateadores
 └── ...
 ```
 
 ## Decisiones de arquitectura
 
-1. `MonitorLayout` concentra el chrome de la aplicación; las páginas solo
-   conocen su contenido.
-2. Las rutas están separadas de la composición de la aplicación para poder
-   añadir guardas, loaders o layouts anidados cuando exista autenticación.
-3. Los componentes del dashboard reciben datos mapeados y no conocen Axios ni
-   la forma cruda de las respuestas HTTP.
-4. `apiService` concentra los endpoints tipados y `useDashboardData` coordina
-   cache, refresh, errores, empty y stale con TanStack Query.
-5. `utils/mockData.ts` queda aislado para gráficos históricos y actividad sin
-   endpoint real; la interfaz los marca como datos simulados.
-6. La API sigue siendo de solo lectura desde el frontend; no se agregan
-   autenticación, persistencia ni lógica de negocio.
+1. `MonitorLayout` concentra el shell visual; las páginas solo conocen su
+   contenido.
+2. `apiService` centraliza endpoints tipados; cada recurso tiene hooks Query
+   independientes y refresh de 60 segundos.
+3. Los componentes reciben datos normalizados y no conocen Axios ni la forma
+   cruda de las respuestas HTTP.
+4. Todas las páginas exponen loading, error, empty, stale, última actualización
+   y reintento cuando aplica.
+5. Los gráficos del dashboard usan las últimas 24 muestras reales del API.
+   No se mantienen mocks de runtime; los mocks restantes están únicamente en
+   fixtures de pruebas.
+6. La UI de este sprint es de solo lectura. El endpoint de alertas persiste la
+   evaluación local, pero el frontend no ejecuta acciones de infraestructura.
 
-## Alcance actual
+## Rutas conectadas
 
-Incluido: shell visual oscuro, sidebar responsive, topbar, rutas, dashboard
-con datos reales de lectura, estados de UX, tabla de servidores y gráficos
-históricos simulados claramente marcados.
-
-Excluido: login, JWT, WebSockets, integración con Prometheus real, acciones de
-escritura, modificaciones de backend y despliegue al VPS.
+- `/dashboard`: overview, servidores, canales, alertas, colección, health e
+  histórico real de servidores.
+- `/servers`: inventario, filtros, búsqueda, ordenamiento, paginación y últimas
+  métricas.
+- `/server/:id`: detalle, filesystem, swap, IO, load, uptime, heartbeat,
+  colección, alertas y muestras recientes.
+- `/channels`: inventario y última muestra por canal; Xtream no está integrado.
+- `/balance`: capacidad y utilización agregada.
+- `/recommendations`: reglas deterministas sin IA.
+- `/alerts`: ciclo de vida persistido y filtros de estado.
+- `/settings`: límites visuales para preferencias futuras.
