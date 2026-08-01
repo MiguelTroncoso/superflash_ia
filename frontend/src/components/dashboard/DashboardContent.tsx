@@ -17,7 +17,12 @@ import { TrafficChart } from '../charts/TrafficChart'
 import { ActivityTable } from '../tables/ActivityTable'
 import { DashboardFreshness } from './DashboardFreshness'
 import type { CollectionStatusResponse, HealthResponse } from '../../types/api'
-import type { DashboardServerRow, DashboardSummary } from '../../utils/dashboardMetrics'
+import type {
+  DashboardHistoryPoint,
+  DashboardServerRow,
+  DashboardSummary,
+} from '../../utils/dashboardMetrics'
+import type { AlertsResponse } from '../../types/api'
 import { formatNullablePercent, formatNullableThroughput } from '../../utils/formatters'
 
 interface DashboardContentProps {
@@ -29,6 +34,8 @@ interface DashboardContentProps {
   isStale: boolean
   lastUpdatedAt: number
   onRefresh: () => void
+  history: DashboardHistoryPoint[]
+  alerts: AlertsResponse['alerts']
 }
 
 export function DashboardContent({
@@ -40,6 +47,8 @@ export function DashboardContent({
   isStale,
   lastUpdatedAt,
   onRefresh,
+  history,
+  alerts,
 }: DashboardContentProps): React.JSX.Element {
   const healthyServers = rows.filter((row) => row.state === 'healthy').length
   const warningServers = rows.length - healthyServers
@@ -128,28 +137,22 @@ export function DashboardContent({
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-sm font-semibold text-copy">System load</p>
-              <p className="mt-1 text-xs text-muted">Historical endpoint not available yet</p>
+              <p className="mt-1 text-xs text-muted">Last 24 samples from the read-only API</p>
             </div>
-            <span className="rounded-lg border border-line bg-panel-raised px-2.5 py-1.5 text-[10px] font-medium text-muted">
-              Simulated data
-            </span>
           </div>
           <div className="mt-4">
-            <SystemLoadChart />
+            <SystemLoadChart data={history} />
           </div>
         </Surface>
         <Surface className="p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-sm font-semibold text-copy">Network traffic</p>
-              <p className="mt-1 text-xs text-muted">Historical endpoint not available yet</p>
+              <p className="mt-1 text-xs text-muted">Last 24 samples from the read-only API</p>
             </div>
-            <span className="rounded-lg border border-line bg-panel-raised px-2.5 py-1.5 text-[10px] font-medium text-muted">
-              Simulated data
-            </span>
           </div>
           <div className="mt-4">
-            <TrafficChart />
+            <TrafficChart data={history} />
           </div>
         </Surface>
       </div>
@@ -160,7 +163,7 @@ export function DashboardContent({
           collectionStatus={collectionStatus}
           summary={summary}
         />
-        <ActivityFeed />
+        <ActivityFeed alerts={alerts} collectionStatus={collectionStatus} />
       </div>
 
       <div className="mt-5">

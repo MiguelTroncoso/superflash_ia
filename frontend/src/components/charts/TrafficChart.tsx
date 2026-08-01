@@ -8,17 +8,22 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { trafficSeries } from '../../utils/mockData'
+import type { DashboardHistoryPoint } from '../../utils/dashboardMetrics'
 
-export function TrafficChart(): React.JSX.Element {
+interface TrafficChartProps {
+  data: DashboardHistoryPoint[]
+}
+
+export function TrafficChart({ data }: TrafficChartProps): React.JSX.Element {
   return (
     <div className="h-[280px] w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart
-          data={trafficSeries}
-          barGap={6}
-          margin={{ top: 10, right: 4, left: -22, bottom: 0 }}
-        >
+      {data.length === 0 ? (
+        <div className="flex h-full items-center justify-center text-xs text-muted">
+          No historical metrics available
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} barGap={6} margin={{ top: 10, right: 4, left: -22, bottom: 0 }}>
           <CartesianGrid stroke="#253044" strokeDasharray="3 3" vertical={false} />
           <XAxis
             axisLine={false}
@@ -55,8 +60,9 @@ export function TrafficChart(): React.JSX.Element {
           />
           <Bar dataKey="inbound" fill="#34d399" radius={[4, 4, 0, 0]} />
           <Bar dataKey="outbound" fill="#38bdf8" radius={[4, 4, 0, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
+          </BarChart>
+        </ResponsiveContainer>
+      )}
     </div>
   )
 }

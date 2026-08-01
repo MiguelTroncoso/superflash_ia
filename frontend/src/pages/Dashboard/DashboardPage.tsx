@@ -67,6 +67,8 @@ export function DashboardPage(): React.JSX.Element {
         isStale={dashboard.isStale}
         lastUpdatedAt={dashboard.lastUpdatedAt}
         onRefresh={() => void dashboard.refetch()}
+        history={dashboard.history}
+        alerts={dashboard.alerts}
       />
     </>
   )

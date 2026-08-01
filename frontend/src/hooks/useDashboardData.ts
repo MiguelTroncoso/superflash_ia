@@ -10,10 +10,12 @@ import type {
 } from '../types/api'
 import {
   buildDashboardSummary,
+  buildDashboardHistory,
   hasMetricSamples,
   mapServerRows,
   type DashboardServerRow,
   type DashboardSummary,
+  type DashboardHistoryPoint,
 } from '../utils/dashboardMetrics'
 
 const queryOptions = {
@@ -35,6 +37,7 @@ export interface DashboardData {
   alerts: AlertsResponse['alerts']
   health: HealthResponse | null
   collectionStatus: CollectionStatusResponse | null
+  history: DashboardHistoryPoint[]
   refetch: () => Promise<void>
 }
 
@@ -73,8 +76,8 @@ export function useDashboardData(): DashboardData {
   const enabledServers = (serversQuery.data ?? []).filter((server) => server.enabled)
   const metricQueries = useQueries({
     queries: enabledServers.map((server) => ({
-      queryKey: ['dashboard', 'server-metrics', server.id, 'latest'],
-      queryFn: () => apiService.getServerMetrics(server.id),
+      queryKey: ['dashboard', 'server-metrics', server.id, 'history'],
+      queryFn: () => apiService.getServerMetrics(server.id, 24),
       ...queryOptions,
     })),
   })
@@ -94,9 +97,11 @@ export function useDashboardData(): DashboardData {
   const error = queries.find((query) => query.isError)?.error ?? null
   const lastUpdatedAt = Math.max(...queries.map((query) => query.dataUpdatedAt), 0)
   const latestMetrics = new Map<number, ServerMetricResponse | undefined>()
+  const histories = new Map<number, ServerMetricResponse[]>()
 
   enabledServers.forEach((server, index) => {
     latestMetrics.set(server.id, metricQueries[index]?.data?.[0])
+    histories.set(server.id, metricQueries[index]?.data ?? [])
   })
 
   const rows =
@@ -106,11 +111,11 @@ export function useDashboardData(): DashboardData {
   const dataReady =
     !isLoading &&
     !isError &&
-    overviewQuery.data &&
-    channelsQuery.data &&
-    alertsQuery.data &&
-    collectionQuery.data &&
-    healthQuery.data
+    overviewQuery.data !== undefined &&
+    channelsQuery.data !== undefined &&
+    alertsQuery.data !== undefined &&
+    collectionQuery.data !== undefined &&
+    healthQuery.data !== undefined
   const summary = dataReady
     ? buildDashboardSummary(
         overviewQuery.data,
@@ -140,6 +145,7 @@ export function useDashboardData(): DashboardData {
     alerts: alertsQuery.data?.alerts ?? [],
     health: healthQuery.data ?? null,
     collectionStatus: collectionQuery.data ?? null,
+    history: buildDashboardHistory(histories),
     refetch,
   }
 }

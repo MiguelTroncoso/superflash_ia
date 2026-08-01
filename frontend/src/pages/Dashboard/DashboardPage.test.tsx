@@ -74,6 +74,9 @@ function dashboardState(overrides: Partial<DashboardData> = {}): DashboardData {
       errors: [],
       next_run_at: null,
     },
+    history: [
+      { time: '10:00', cpu: 62, memory: 71, inbound: 22, outbound: 140 },
+    ],
     refetch: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   }
@@ -112,7 +115,7 @@ describe('DashboardPage', () => {
     expect(screen.getByText(/no server samples/i)).toBeInTheDocument()
   })
 
-  it('renders API-shaped data and clearly labels simulated sections', () => {
+  it('renders API-shaped data without mock dashboard sections', () => {
     dashboardMock.mockReturnValue(dashboardState())
     renderPage()
 
@@ -121,6 +124,7 @@ describe('DashboardPage', () => {
     expect(screen.getAllByText('140.0 Mbps')).toHaveLength(2)
     expect(screen.getByText('sf-core-01')).toBeInTheDocument()
     expect(screen.getByText('Latest server metrics from the read-only API')).toBeInTheDocument()
-    expect(screen.getAllByText('Simulated data')).toHaveLength(3)
+    expect(screen.getAllByText('Last 24 samples from the read-only API')).toHaveLength(2)
+    expect(screen.queryByText('Simulated data')).not.toBeInTheDocument()
   })
 })

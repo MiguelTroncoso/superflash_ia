@@ -38,6 +38,14 @@ export interface DashboardSummary {
   collectionLabel: string
 }
 
+export interface DashboardHistoryPoint {
+  time: string
+  cpu: number
+  memory: number
+  inbound: number
+  outbound: number
+}
+
 function average(values: Array<number | null>): number | null {
   const validValues = values.filter((value): value is number => value !== null)
   if (validValues.length === 0) return null
@@ -115,4 +123,31 @@ export function buildDashboardSummary(
 
 export function hasMetricSamples(rows: DashboardServerRow[]): boolean {
   return rows.some((row) => row.collectedAt !== null)
+}
+
+export function buildDashboardHistory(
+  histories: ReadonlyMap<number, ServerMetricResponse[]>,
+): DashboardHistoryPoint[] {
+  const buckets = new Map<string, ServerMetricResponse[]>()
+  histories.forEach((metrics) => {
+    metrics.forEach((metric) => {
+      const bucket = buckets.get(metric.collected_at) ?? []
+      bucket.push(metric)
+      buckets.set(metric.collected_at, bucket)
+    })
+  })
+
+  return [...buckets.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([timestamp, metrics]) => ({
+      time: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      cpu: average(metrics.map((metric) => metric.cpu_percent)) ?? 0,
+      memory: average(metrics.map((metric) => metric.memory_percent)) ?? 0,
+      inbound: round(metrics.reduce((total, metric) => total + metric.input_mbps, 0)),
+      outbound: round(metrics.reduce((total, metric) => total + metric.output_mbps, 0)),
+    }))
+}
+
+function round(value: number): number {
+  return Math.round(value * 100) / 100
 }

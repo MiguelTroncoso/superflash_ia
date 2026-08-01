@@ -9,6 +9,9 @@ export type ApiAlertType =
   | 'high_network_utilization'
   | 'stale_server'
 
+export type ApiAlertSeverity = 'info' | 'warning' | 'critical'
+export type ApiAlertStatus = 'active' | 'acknowledged' | 'resolved'
+
 export type ApiCollectionStatus = 'running' | 'success' | 'error'
 
 export type ApiCollectionTrigger = 'manual' | 'scheduler'
@@ -53,7 +56,20 @@ export interface ServerResponse {
   name: string
   hostname: string | null
   role: ApiServerRole
+  provider: string | null
+  datacenter: string | null
+  group: string | null
+  tags: string[]
+  type: string | null
+  country: string | null
   network_capacity_mbps: number | null
+  network_speed_mbps: number | null
+  prometheus_url: string | null
+  prometheus_configured: boolean
+  heartbeat_interval_seconds: number
+  last_heartbeat_at: string | null
+  status: 'online' | 'degraded' | 'offline' | 'unknown' | 'maintenance'
+  notes: string | null
   enabled: boolean
   created_at: string
   updated_at: string
@@ -66,8 +82,15 @@ export interface ServerMetricResponse {
   cpu_percent: number
   memory_percent: number
   disk_percent: number | null
+  filesystem_percent: number | null
+  swap_percent: number | null
   input_mbps: number
   output_mbps: number
+  io_read_mbps: number | null
+  io_write_mbps: number | null
+  load_average_1m: number | null
+  load_average_5m: number | null
+  load_average_15m: number | null
   active_connections: number
   active_streams: number
   uptime_seconds: number | null
@@ -86,13 +109,20 @@ export interface ChannelResponse {
 }
 
 export interface AlertResponse {
+  id: number
   type: ApiAlertType
+  severity: ApiAlertSeverity
+  status: ApiAlertStatus
   server_id: number
   server_name: string
   message: string
   value: number | null
   threshold: number | null
   collected_at: string | null
+  first_seen_at: string | null
+  last_seen_at: string | null
+  acknowledged_at: string | null
+  resolved_at: string | null
 }
 
 export interface AlertsResponse {
@@ -114,4 +144,55 @@ export interface CollectionStatusResponse {
   skipped: number
   errors: string[]
   next_run_at: string | null
+}
+
+export interface BalanceServerResponse {
+  server_id: number
+  name: string
+  output_mbps: number
+  capacity_mbps: number | null
+  utilization_percent: number | null
+}
+
+export interface BalanceResponse {
+  generated_at: string
+  server_count: number
+  sampled_server_count: number
+  average_cpu_percent: number | null
+  average_memory_percent: number | null
+  average_network_mbps: number | null
+  average_network_utilization_percent: number | null
+  average_disk_percent: number | null
+  capacity_total_mbps: number
+  capacity_used_mbps: number
+  capacity_free_mbps: number
+  most_loaded: BalanceServerResponse | null
+  least_utilized: BalanceServerResponse | null
+  servers: BalanceServerResponse[]
+}
+
+export type RecommendationType =
+  | 'high_cpu'
+  | 'high_memory'
+  | 'high_disk'
+  | 'high_network'
+  | 'heartbeat_lost'
+  | 'no_data'
+  | 'underutilized'
+
+export interface RecommendationResponse {
+  type: RecommendationType
+  severity: ApiAlertSeverity
+  server_id: number
+  server_name: string
+  title: string
+  message: string
+  value: number | null
+  threshold: number | null
+  generated_at: string
+}
+
+export interface RecommendationsResponse {
+  generated_at: string
+  recommendations: RecommendationResponse[]
 }
