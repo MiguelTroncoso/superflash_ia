@@ -1,0 +1,121 @@
+import { describe, expect, it } from 'vitest'
+import { buildDashboardSummary, mapServerRows } from './dashboardMetrics'
+import type { AlertsResponse, HealthResponse, OverviewResponse, ServerResponse } from '../types/api'
+
+const server: ServerResponse = {
+  id: 1,
+  external_id: 'sf-core-01',
+  name: 'sf-core-01',
+  hostname: 'core-a',
+  role: 'main',
+  network_capacity_mbps: 1000,
+  enabled: true,
+  created_at: '2026-08-01T10:00:00Z',
+  updated_at: '2026-08-01T10:00:00Z',
+}
+
+const overview: OverviewResponse = {
+  generated_at: '2026-08-01T10:00:00Z',
+  enabled_servers: 1,
+  total_active_connections: 12,
+  total_output_mbps: 140,
+  total_input_mbps: 22,
+  avg_cpu_percent: 62,
+  avg_memory_percent: 71,
+  top_output_server: { server_id: 1, name: server.name, output_mbps: 140 },
+  server_network_utilization: [],
+  top_channels: [],
+}
+
+const alerts: AlertsResponse = {
+  generated_at: '2026-08-01T10:00:00Z',
+  alerts: [
+    {
+      type: 'high_cpu',
+      server_id: 1,
+      server_name: server.name,
+      message: 'CPU high',
+      value: 92,
+      threshold: 85,
+      collected_at: '2026-08-01T10:00:00Z',
+    },
+  ],
+}
+
+const health: HealthResponse = { status: 'ok', database: 'ok', version: '0.1.0' }
+
+describe('dashboardMetrics', () => {
+  it('maps latest API metrics and marks alerted servers', () => {
+    const rows = mapServerRows(
+      [server],
+      new Map([
+        [
+          1,
+          {
+            id: 11,
+            server_id: 1,
+            collected_at: '2026-08-01T10:00:00Z',
+            cpu_percent: 92,
+            memory_percent: 71,
+            disk_percent: 44,
+            input_mbps: 22,
+            output_mbps: 140,
+            active_connections: 12,
+            active_streams: 3,
+            uptime_seconds: 100,
+            source: 'mock',
+          },
+        ],
+      ]),
+      alerts,
+    )
+
+    expect(rows[0]).toMatchObject({
+      name: 'sf-core-01',
+      cpuPercent: 92,
+      diskPercent: 44,
+      state: 'warning',
+      stateLabel: 'Attention',
+    })
+  })
+
+  it('derives summary values without inventing disk data', () => {
+    const rows = mapServerRows([server], new Map(), { generated_at: '', alerts: [] })
+    const collectionStatus = {
+      running: false,
+      run_id: 2,
+      source: 'mock',
+      triggered_by: 'scheduler' as const,
+      started_at: '2026-08-01T09:59:00Z',
+      heartbeat_at: '2026-08-01T09:59:05Z',
+      finished_at: '2026-08-01T10:00:00Z',
+      duration_ms: 1000,
+      status: 'success' as const,
+      inserted: 1,
+      skipped: 0,
+      errors: [],
+      next_run_at: null,
+    }
+
+    const summary = buildDashboardSummary(
+      overview,
+      { length: 3 },
+      rows,
+      { generated_at: '', alerts: [] },
+      health,
+      collectionStatus,
+    )
+
+    expect(summary).toMatchObject({
+      serverCount: 1,
+      channelCount: 3,
+      avgCpuPercent: 62,
+      avgMemoryPercent: 71,
+      avgDiskPercent: null,
+      totalInputMbps: 22,
+      totalOutputMbps: 140,
+      alertCount: 0,
+      generalState: 'healthy',
+    })
+  })
+})

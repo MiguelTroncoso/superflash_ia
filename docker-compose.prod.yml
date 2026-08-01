@@ -111,8 +111,12 @@ services:
       # - "${HTTPS_PORT:-443}:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # El entrypoint renderiza este template con el secreto del servidor.
+      - ./nginx/conf.d/default.conf:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/inject-api-key.sh:/docker-entrypoint.d/40-inject-api-key.sh:ro
       # - ./nginx/certs:/etc/nginx/certs:ro
+    secrets:
+      - superflash_api_key
     networks:
       - frontend
     depends_on:
@@ -134,6 +138,12 @@ networks:
   backend:
     driver: bridge
     internal: true
+
+secrets:
+  # Compose toma API_KEY del entorno del host y la monta solo en Nginx.
+  # El valor nunca se escribe en el repositorio ni en respuestas HTTP.
+  superflash_api_key:
+    environment: API_KEY
 
 volumes:
   postgres_data:
