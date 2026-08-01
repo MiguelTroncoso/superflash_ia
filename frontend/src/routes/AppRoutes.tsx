@@ -11,6 +11,12 @@ const DashboardPage = lazy(() =>
 const AlertsPage = lazy(() =>
   import('../pages/Alerts/AlertsPage').then((module) => ({ default: module.AlertsPage })),
 )
+const BalancePage = lazy(() =>
+  import('../pages/Balance/BalancePage').then((module) => ({ default: module.BalancePage })),
+)
+const RecommendationsPage = lazy(() =>
+  import('../pages/Recommendations/RecommendationsPage').then((module) => ({ default: module.RecommendationsPage })),
+)
 const ServersPage = lazy(() =>
   import('../pages/Servers/ServersPage').then((module) => ({ default: module.ServersPage })),
 )
@@ -40,6 +46,8 @@ export function AppRoutes(): React.JSX.Element {
           <Route path="server/:serverId" element={<ServerDetailPage />} />
           <Route path="channels" element={<ChannelsPage />} />
           <Route path="alerts" element={<AlertsPage />} />
+          <Route path="balance" element={<BalancePage />} />
+          <Route path="recommendations" element={<RecommendationsPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>

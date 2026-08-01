@@ -8,6 +8,8 @@ const pageNames: Record<string, string> = {
   '/servers': 'Servers',
   '/channels': 'Channels',
   '/alerts': 'Alerts',
+  '/balance': 'Balance',
+  '/recommendations': 'Recommendations',
   '/settings': 'Settings',
 }
 

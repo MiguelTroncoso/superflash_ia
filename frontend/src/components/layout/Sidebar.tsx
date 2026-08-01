@@ -1,4 +1,4 @@
-import { Bell, LayoutDashboard, Radio, Server, Settings2, X } from 'lucide-react'
+import { Bell, Gauge, LayoutDashboard, Radio, Server, Settings2, Sparkles, X } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import brandMark from '../../assets/brand-mark.svg'
 import { useUiStore } from '../../store/uiStore'
@@ -8,7 +8,9 @@ const navItems = [
   { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
   { label: 'Servers', path: '/servers', icon: Server },
   { label: 'Channels', path: '/channels', icon: Radio },
-  { label: 'Alerts', path: '/alerts', icon: Bell, count: 2 },
+  { label: 'Alerts', path: '/alerts', icon: Bell },
+  { label: 'Balance', path: '/balance', icon: Gauge },
+  { label: 'Recommendations', path: '/recommendations', icon: Sparkles },
   { label: 'Settings', path: '/settings', icon: Settings2 },
 ]
 
@@ -116,7 +118,7 @@ export function Sidebar({ isCollapsed }: SidebarProps): React.JSX.Element {
               </span>
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold text-copy">Read-only mode</p>
-                <p className="mt-0.5 text-[11px] text-muted">Mock environment</p>
+                <p className="mt-0.5 text-[11px] text-muted">Read-only API</p>
               </div>
             </div>
             {isCollapsed && (
