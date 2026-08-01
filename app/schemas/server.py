@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.server import ServerOperationalStatus, ServerRole
+from app.schemas.pagination import PageMetadata
 
 
 class ServerFields(BaseModel):
@@ -117,3 +118,18 @@ class ServerMetricRead(BaseModel):
     active_streams: int
     uptime_seconds: int | None
     source: str
+
+
+class ServerListItem(ServerRead):
+    """Servidor junto con su última muestra y resumen operativo."""
+
+    latest_metric: ServerMetricRead | None = None
+    network_utilization_percent: float | None = None
+    active_alert_count: int = Field(ge=0)
+    last_updated_at: datetime | None = None
+
+
+class ServerPage(PageMetadata):
+    """Página de inventario de servidores."""
+
+    items: list[ServerListItem]

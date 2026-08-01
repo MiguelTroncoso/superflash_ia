@@ -41,7 +41,13 @@ def test_list_and_get_server(client, session):
 
     listed = client.get("/api/v1/servers")
     assert listed.status_code == 200
-    assert [item["external_id"] for item in listed.json()] == ["srv-hist"]
+    body = listed.json()
+    assert body["page"] == 1
+    assert body["page_size"] == 50
+    assert body["total"] == 1
+    assert [item["external_id"] for item in body["items"]] == ["srv-hist"]
+    assert body["items"][0]["latest_metric"]["output_mbps"] == 111.0
+    assert body["items"][0]["active_alert_count"] == 0
 
     detail = client.get(f"/api/v1/servers/{server.id}")
     assert detail.status_code == 200
@@ -133,7 +139,7 @@ def test_server_inventory_crud_does_not_return_prometheus_token(client):
 
     listed = client.get("/api/v1/servers")
     assert listed.status_code == 200
-    assert any(item["id"] == server_id for item in listed.json())
+    assert any(item["id"] == server_id for item in listed.json()["items"])
 
     deleted = client.delete(f"/api/v1/servers/{server_id}")
     assert deleted.status_code == 204

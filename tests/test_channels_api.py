@@ -54,16 +54,21 @@ def test_list_channels_filters(client, session):
     server, _sports, _movies = _seed_channels(session)
 
     everything = client.get("/api/v1/channels").json()
-    assert len(everything) == 2
+    assert everything["total"] == 2
+    assert len(everything["items"]) == 2
 
     by_server = client.get("/api/v1/channels", params={"server_id": server.id}).json()
-    assert [item["external_id"] for item in by_server] == ["ch-sports"]
+    assert [item["external_id"] for item in by_server["items"]] == ["ch-sports"]
 
     by_category = client.get("/api/v1/channels", params={"category": "cine"}).json()
-    assert [item["external_id"] for item in by_category] == ["ch-movies"]
+    assert [item["external_id"] for item in by_category["items"]] == ["ch-movies"]
 
     enabled_only = client.get("/api/v1/channels", params={"enabled": "true"}).json()
-    assert [item["external_id"] for item in enabled_only] == ["ch-sports"]
+    assert [item["external_id"] for item in enabled_only["items"]] == ["ch-sports"]
+
+    sports = next(item for item in everything["items"] if item["external_id"] == "ch-sports")
+    assert sports["latest_metric"]["viewers"] == 1000
+    assert sports["current_server_name"] == "Servidor A"
 
 
 def test_channel_metrics_history(client, session):

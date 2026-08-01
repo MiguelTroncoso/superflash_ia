@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from app.models.channel import ChannelStatus
+from app.schemas.pagination import PageMetadata
 
 
 class ChannelRead(BaseModel):
@@ -35,3 +36,21 @@ class ChannelMetricRead(BaseModel):
     bitrate_mbps: float | None
     estimated_output_mbps: float | None
     status: ChannelStatus
+
+
+class ChannelListItem(ChannelRead):
+    """Canal junto con servidor asignado y última muestra."""
+
+    current_server_name: str | None = None
+    latest_metric: ChannelMetricRead | None = None
+    viewers: int | None = None
+    bitrate_mbps: float | None = None
+    estimated_output_mbps: float | None = None
+    status: ChannelStatus | None = None
+    last_updated_at: datetime | None = None
+
+
+class ChannelPage(PageMetadata):
+    """Página de inventario de canales."""
+
+    items: list[ChannelListItem]
