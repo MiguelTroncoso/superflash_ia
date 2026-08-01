@@ -108,6 +108,17 @@ export interface ChannelResponse {
   updated_at: string
 }
 
+export interface ChannelMetricResponse {
+  id: number
+  channel_id: number
+  server_id: number | null
+  collected_at: string
+  viewers: number
+  bitrate_mbps: number | null
+  estimated_output_mbps: number | null
+  status: 'online' | 'degraded' | 'offline' | 'unknown'
+}
+
 export interface AlertResponse {
   id: number
   type: ApiAlertType

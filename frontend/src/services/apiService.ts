@@ -2,6 +2,7 @@ import { httpClient } from './httpClient'
 import type {
   AlertsResponse,
   BalanceResponse,
+  ChannelMetricResponse,
   ChannelResponse,
   CollectionStatusResponse,
   HealthResponse,
@@ -21,9 +22,13 @@ async function getData<T>(path: string, params?: Record<string, number>): Promis
 export const apiService = {
   getOverview: (): Promise<OverviewResponse> => getData(`${API_V1_PREFIX}/overview`),
   getServers: (): Promise<ServerResponse[]> => getData(`${API_V1_PREFIX}/servers`),
+  getServer: (serverId: number): Promise<ServerResponse> =>
+    getData(`${API_V1_PREFIX}/servers/${serverId}`),
   getServerMetrics: (serverId: number, limit = 1): Promise<ServerMetricResponse[]> =>
     getData(`${API_V1_PREFIX}/servers/${serverId}/metrics`, { limit }),
   getChannels: (): Promise<ChannelResponse[]> => getData(`${API_V1_PREFIX}/channels`),
+  getChannelMetrics: (channelId: number, limit = 1): Promise<ChannelMetricResponse[]> =>
+    getData(`${API_V1_PREFIX}/channels/${channelId}/metrics`, { limit }),
   getAlerts: (): Promise<AlertsResponse> => getData(`${API_V1_PREFIX}/alerts`),
   getCollectionStatus: (): Promise<CollectionStatusResponse> =>
     getData(`${API_V1_PREFIX}/collection/status`),

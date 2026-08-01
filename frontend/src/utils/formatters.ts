@@ -29,6 +29,14 @@ export function formatDateTime(value: string | null): string {
   }).format(new Date(value))
 }
 
+export function formatUptime(value: number | null): string {
+  if (value === null) return '—'
+  const days = Math.floor(value / 86_400)
+  const hours = Math.floor((value % 86_400) / 3_600)
+  const minutes = Math.floor((value % 3_600) / 60)
+  return days > 0 ? `${days}d ${hours}h` : `${hours}h ${minutes}m`
+}
+
 export function cn(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(' ')
 }
