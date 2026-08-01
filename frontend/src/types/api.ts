@@ -64,7 +64,6 @@ export interface ServerResponse {
   country: string | null
   network_capacity_mbps: number | null
   network_speed_mbps: number | null
-  prometheus_url: string | null
   prometheus_configured: boolean
   heartbeat_interval_seconds: number
   last_heartbeat_at: string | null

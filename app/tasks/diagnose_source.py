@@ -46,7 +46,7 @@ def _print_header(settings: Settings, source: _SourceChoice) -> None:
     )
     if settings.infrastructure_source == "prometheus":
         print(
-            f"prometheus: url={settings.prometheus_url} | "
+            "prometheus: url=configured | "
             f"timeout={settings.prometheus_timeout_seconds}s | "
             f"tls_verify={settings.prometheus_tls_verify} | bearer token: {token_state}"
         )

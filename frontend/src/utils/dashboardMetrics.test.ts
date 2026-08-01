@@ -16,7 +16,6 @@ const server: ServerResponse = {
   country: 'CL',
   network_capacity_mbps: 1000,
   network_speed_mbps: 1000,
-  prometheus_url: null,
   prometheus_configured: false,
   heartbeat_interval_seconds: 300,
   last_heartbeat_at: null,

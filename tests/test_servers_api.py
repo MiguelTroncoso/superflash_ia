@@ -49,6 +49,8 @@ def test_list_and_get_server(client, session):
     assert body["name"] == "Histórico 01"
     assert body["role"] == "live"
     assert body["network_capacity_mbps"] == 1000.0
+    assert "prometheus_url" not in body
+    assert "prometheus_token" not in body
 
 
 def test_get_server_not_found(client):
@@ -118,6 +120,7 @@ def test_server_inventory_crud_does_not_return_prometheus_token(client):
     assert body["country"] == "CL"
     assert body["network_speed_mbps"] == 1000.0
     assert body["prometheus_configured"] is True
+    assert "prometheus_url" not in body
     assert "prometheus_token" not in body
 
     updated = client.patch(

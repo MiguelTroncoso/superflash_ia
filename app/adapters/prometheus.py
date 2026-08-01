@@ -310,7 +310,9 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
                     probe.error = str(error)
                 except (httpx.HTTPError, PrometheusSourceError) as error:
                     probe.reachable = False
-                    probe.error = f"{type(error).__name__}: {error}"
+                    # El detalle de httpx puede contener la URL privada del
+                    # endpoint; el diagnóstico expone únicamente la clase.
+                    probe.error = type(error).__name__
                 probes.append(probe)
         return probes
 

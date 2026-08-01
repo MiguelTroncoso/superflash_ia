@@ -106,6 +106,8 @@ def test_diagnose_prometheus_lists_available_metrics(
     assert "disk_percent = NO DISPONIBLE" in output
     assert "No se escribió nada en la base de datos." in output
     assert "solo GET de consulta" in output
+    assert "url=configured" in output
+    assert fake_prometheus not in output
 
 
 def test_diagnose_prometheus_hides_bearer_token(

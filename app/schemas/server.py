@@ -83,7 +83,6 @@ class ServerRead(BaseModel):
     country: str | None
     network_capacity_mbps: float | None
     network_speed_mbps: float | None
-    prometheus_url: str | None
     prometheus_configured: bool
     heartbeat_interval_seconds: int
     last_heartbeat_at: datetime | None
