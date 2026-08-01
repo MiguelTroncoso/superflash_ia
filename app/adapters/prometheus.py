@@ -21,7 +21,7 @@ Seguridad:
 
 import logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -34,6 +34,7 @@ from app.adapters.sources import (
     InfrastructureMetricSnapshot,
     ServerStatus,
 )
+from app.models.server import Server, ServerRole
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ _QUERY_PATH = "/api/v1/query"
 # Filtros estándar: descartar pseudo-sistemas de archivos e interfaces
 # virtuales para que disco y red reflejen el hardware real.
 _FS_FILTER = 'fstype!~"tmpfs|overlay|squashfs|ramfs"'
+_DISK_FILTER = 'device!~"loop.*|ram.*"'
 _NIC_FILTER = 'device!~"lo|veth.*|docker.*|br-.*"'
 
 _ESSENTIAL_METRICS = ("cpu_percent", "memory_percent", "input_mbps", "output_mbps")
@@ -69,11 +71,24 @@ def build_queries(instance: str) -> dict[str, str]:
             f"max(100 * (1 - node_filesystem_avail_bytes{{{i},{_FS_FILTER}}} "
             f"/ node_filesystem_size_bytes{{{i},{_FS_FILTER}}}))"
         ),
+        "filesystem_percent": (
+            f"max(100 * (1 - node_filesystem_avail_bytes{{{i},{_FS_FILTER}}} "
+            f"/ node_filesystem_size_bytes{{{i},{_FS_FILTER}}}))"
+        ),
+        "swap_percent": (
+            f"100 * (1 - (node_memory_SwapFree_bytes{{{i}}} / node_memory_SwapTotal_bytes{{{i}}}))"
+        ),
         "input_mbps": (
             f"sum(rate(node_network_receive_bytes_total{{{i},{_NIC_FILTER}}}[5m])) * 8 / 1000000"
         ),
         "output_mbps": (
             f"sum(rate(node_network_transmit_bytes_total{{{i},{_NIC_FILTER}}}[5m])) * 8 / 1000000"
+        ),
+        "io_read_mbps": (
+            f"sum(rate(node_disk_read_bytes_total{{{i},{_DISK_FILTER}}}[5m])) * 8 / 1000000"
+        ),
+        "io_write_mbps": (
+            f"sum(rate(node_disk_written_bytes_total{{{i},{_DISK_FILTER}}}[5m])) * 8 / 1000000"
         ),
         "load_average_1m": f"node_load1{{{i}}}",
         "load_average_5m": f"node_load5{{{i}}}",
@@ -206,6 +221,8 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
             return round(max(0.0, value), digits) if value is not None else None
 
         disk = values["disk_percent"]
+        filesystem = values["filesystem_percent"]
+        swap = values["swap_percent"]
         uptime = values["uptime_seconds"]
         cpu = values["cpu_percent"]
         memory = values["memory_percent"]
@@ -219,8 +236,12 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
             cpu_percent=_clamp_percent(cpu),
             memory_percent=_clamp_percent(memory),
             disk_percent=_clamp_percent(disk) if disk is not None else None,
+            filesystem_percent=(_clamp_percent(filesystem) if filesystem is not None else None),
+            swap_percent=_clamp_percent(swap) if swap is not None else None,
             input_mbps=round(max(0.0, input_mbps), 2),
             output_mbps=round(max(0.0, output_mbps), 2),
+            io_read_mbps=_optional("io_read_mbps"),
+            io_write_mbps=_optional("io_write_mbps"),
             load_average_1m=_optional("load_average_1m"),
             load_average_5m=_optional("load_average_5m"),
             load_average_15m=_optional("load_average_15m"),
@@ -292,3 +313,95 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
                     probe.error = f"{type(error).__name__}: {error}"
                 probes.append(probe)
         return probes
+
+
+def _node_exporter_instance(hostname: str) -> str:
+    """Normaliza un hostname administrado al puerto estándar de node_exporter."""
+    if ":" in hostname or hostname.startswith("["):
+        return hostname
+    return f"{hostname}:9100"
+
+
+class DatabasePrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
+    """Provider Prometheus que usa los targets administrados en PostgreSQL.
+
+    Los servidores se agrupan por URL/token para reutilizar conexiones
+    lógicas sin mezclar credenciales entre Prometheus distintos. El token
+    solo vive en memoria durante la recolección y nunca forma parte de un
+    snapshot, log o respuesta de API.
+    """
+
+    def __init__(
+        self,
+        servers: Sequence[Server],
+        timeout_seconds: float = 10.0,
+        verify_tls: bool = True,
+        transport: httpx.BaseTransport | None = None,
+        now_fn: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._servers = tuple(server for server in servers if server.enabled)
+        self._timeout_seconds = timeout_seconds
+        self._verify_tls = verify_tls
+        self._transport = transport
+        self._now_fn = now_fn
+
+    @property
+    def source_name(self) -> str:
+        return "prometheus"
+
+    def get_servers(self) -> list[ServerSnapshot]:
+        return [
+            ServerSnapshot(
+                external_id=server.external_id,
+                name=server.name,
+                hostname=server.hostname,
+                role=server.role,
+                network_capacity_mbps=server.network_capacity_mbps,
+                enabled=server.enabled,
+            )
+            for server in self._servers
+        ]
+
+    def get_infrastructure_metrics(self) -> list[InfrastructureMetricSnapshot]:
+        groups: dict[tuple[str, str | None], list[Server]] = {}
+        for server in self._servers:
+            if server.prometheus_url and server.hostname:
+                groups.setdefault((server.prometheus_url, server.prometheus_token), []).append(
+                    server
+                )
+
+        snapshots: list[InfrastructureMetricSnapshot] = []
+        failures: list[str] = []
+        for (base_url, token), servers in groups.items():
+            inventory = Inventory(
+                servers=[
+                    InventoryServer(
+                        external_id=server.external_id,
+                        name=server.name,
+                        hostname=server.hostname,
+                        role=server.role or ServerRole.OTHER,
+                        network_capacity_mbps=server.network_capacity_mbps,
+                        node_exporter_instance=_node_exporter_instance(server.hostname or ""),
+                        enabled=server.enabled,
+                    )
+                    for server in servers
+                ]
+            )
+            adapter = PrometheusInfrastructureAdapter(
+                base_url=base_url,
+                inventory=inventory,
+                timeout_seconds=self._timeout_seconds,
+                bearer_token=token,
+                verify_tls=self._verify_tls,
+                transport=self._transport,
+                now_fn=self._now_fn,
+            )
+            try:
+                snapshots.extend(adapter.get_infrastructure_metrics())
+            except PrometheusSourceError as error:
+                failures.append(f"{len(servers)} targets: {type(error).__name__}")
+                logger.warning("fallo en grupo Prometheus de %d targets", len(servers))
+
+        if groups and not snapshots and failures:
+            raise PrometheusSourceError("ningún target administrado respondió")
+        return snapshots

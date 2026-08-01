@@ -79,10 +79,10 @@ class ServerRead(BaseModel):
     datacenter: str | None
     group: str | None
     tags: list[str]
-    type: str | None = Field(validation_alias="server_type")
+    type: str | None
     country: str | None
     network_capacity_mbps: float | None
-    network_speed_mbps: float | None = Field(validation_alias="network_capacity_mbps")
+    network_speed_mbps: float | None
     prometheus_url: str | None
     prometheus_configured: bool
     heartbeat_interval_seconds: int
@@ -105,8 +105,15 @@ class ServerMetricRead(BaseModel):
     cpu_percent: float
     memory_percent: float
     disk_percent: float | None
+    filesystem_percent: float | None
+    swap_percent: float | None
     input_mbps: float
     output_mbps: float
+    io_read_mbps: float | None
+    io_write_mbps: float | None
+    load_average_1m: float | None
+    load_average_5m: float | None
+    load_average_15m: float | None
     active_connections: int
     active_streams: int
     uptime_seconds: int | None

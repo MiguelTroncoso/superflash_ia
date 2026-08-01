@@ -20,6 +20,15 @@ class ServerRepository:
         stmt = select(Server).order_by(Server.name)
         return list(self._session.scalars(stmt))
 
+    def list_enabled_with_prometheus(self) -> list[Server]:
+        """Devuelve targets habilitados con URL Prometheus configurada."""
+        stmt = (
+            select(Server)
+            .where(Server.enabled.is_(True), Server.prometheus_url.is_not(None))
+            .order_by(Server.name)
+        )
+        return list(self._session.scalars(stmt))
+
     def get(self, server_id: int) -> Server | None:
         """Busca un servidor por su id interno."""
         return self._session.get(Server, server_id)

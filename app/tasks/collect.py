@@ -37,12 +37,13 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     setup_logging(settings.log_level)
 
-    adapter = (
-        MockMonitoringAdapter(seed=args.seed) if args.seed is not None else get_adapter(settings)
-    )
-
     session = get_session_factory()()
     try:
+        adapter = (
+            MockMonitoringAdapter(seed=args.seed)
+            if args.seed is not None
+            else get_adapter(settings, session)
+        )
         result = get_collection_runner().run(
             session,
             adapter,

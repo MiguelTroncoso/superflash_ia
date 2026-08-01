@@ -4,6 +4,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     DateTime,
@@ -12,7 +13,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     UniqueConstraint,
     func,
@@ -98,6 +98,16 @@ class Server(Base):
         """Indica si existe una URL Prometheus configurada sin exponer el token."""
         return bool(self.prometheus_url)
 
+    @property
+    def network_speed_mbps(self) -> float | None:
+        """Nombre de dominio para la capacidad de red histórica."""
+        return self.network_capacity_mbps
+
+    @property
+    def type(self) -> str | None:
+        """Nombre de dominio público para el tipo de servidor."""
+        return self.server_type
+
 
 class ServerMetric(Base):
     """Muestra puntual de métricas de un servidor (cadencia prevista: 5 min)."""
@@ -115,8 +125,15 @@ class ServerMetric(Base):
     memory_percent: Mapped[float] = mapped_column(Float)
     # Solo lo entregan fuentes de infraestructura granulares (composite).
     disk_percent: Mapped[float | None] = mapped_column(Float)
+    filesystem_percent: Mapped[float | None] = mapped_column(Float)
+    swap_percent: Mapped[float | None] = mapped_column(Float)
     input_mbps: Mapped[float] = mapped_column(Float)
     output_mbps: Mapped[float] = mapped_column(Float)
+    io_read_mbps: Mapped[float | None] = mapped_column(Float)
+    io_write_mbps: Mapped[float | None] = mapped_column(Float)
+    load_average_1m: Mapped[float | None] = mapped_column(Float)
+    load_average_5m: Mapped[float | None] = mapped_column(Float)
+    load_average_15m: Mapped[float | None] = mapped_column(Float)
     active_connections: Mapped[int] = mapped_column(Integer)
     active_streams: Mapped[int] = mapped_column(Integer)
     uptime_seconds: Mapped[int | None] = mapped_column(BigInteger)

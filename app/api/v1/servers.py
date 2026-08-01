@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, to_utc
 from app.api.pagination import NEXT_CURSOR_HEADER, decode_cursor, encode_cursor
+from app.models.server import Server
 from app.repositories.server_repository import ServerRepository
 from app.schemas.server import ServerCreate, ServerMetricRead, ServerRead, ServerUpdate
 
@@ -25,7 +26,7 @@ def _inventory_fields(payload: ServerCreate | ServerUpdate) -> dict[str, object]
     return fields
 
 
-def _server_response(server) -> ServerRead:
+def _server_response(server: Server) -> ServerRead:
     """Construye la respuesta sin devolver el token de Prometheus."""
     return ServerRead.model_validate(server)
 
@@ -44,7 +45,9 @@ def create_server(
         session.commit()
     except IntegrityError:
         session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="external_id ya existe")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="external_id ya existe"
+        ) from None
     return _server_response(server)
 
 
@@ -79,13 +82,17 @@ def update_server(
     if "external_id" in payload.model_fields_set:
         duplicate = repository.get_by_external_id(payload.external_id or "")
         if duplicate is not None and duplicate.id != server_id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="external_id ya existe")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="external_id ya existe"
+            )
     try:
         repository.update(server, _inventory_fields(payload))
         session.commit()
     except IntegrityError:
         session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="external_id ya existe")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="external_id ya existe"
+        ) from None
     return _server_response(server)
 
 

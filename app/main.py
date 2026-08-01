@@ -28,7 +28,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         scheduler = CollectionScheduler(
             interval_seconds=settings.collection_interval_seconds,
             session_factory=get_session_factory(),
-            adapter_factory=lambda: get_adapter(settings),
+            adapter_factory=lambda session: get_adapter(settings, session),
             runner=get_collection_runner(),
             collection_timeout_seconds=settings.collection_timeout_seconds,
         )
