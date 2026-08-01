@@ -81,6 +81,7 @@ class Server(Base):
             values_callable=lambda e: [member.value for member in e],
         ),
         default=ServerOperationalStatus.UNKNOWN,
+        index=True,
     )
     notes: Mapped[str | None] = mapped_column(String(2000))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)

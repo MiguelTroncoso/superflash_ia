@@ -26,7 +26,10 @@ class Alert(Base):
     """Alerta persistida con ciclo de vida operativo."""
 
     __tablename__ = "alerts"
-    __table_args__ = (Index("ix_alerts_server_status", "server_id", "status"),)
+    __table_args__ = (
+        Index("ix_alerts_server_status", "server_id", "status"),
+        Index("ix_alerts_status_last_seen_at", "status", "last_seen_at"),
+    )
 
     id: Mapped[int] = mapped_column(BigIntPK, primary_key=True)
     fingerprint: Mapped[str] = mapped_column(String(220), unique=True, index=True)

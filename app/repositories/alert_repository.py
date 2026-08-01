@@ -1,5 +1,7 @@
 """Persistencia de alertas y su ciclo de vida."""
 
+from collections.abc import Iterable
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,6 +18,14 @@ class AlertRepository:
     def get_by_fingerprint(self, fingerprint: str) -> Alert | None:
         stmt = select(Alert).where(Alert.fingerprint == fingerprint)
         return self._session.scalars(stmt).first()
+
+    def map_by_fingerprints(self, fingerprints: Iterable[str]) -> dict[str, Alert]:
+        """Carga alertas candidatas en una sola consulta."""
+        values = set(fingerprints)
+        if not values:
+            return {}
+        stmt = select(Alert).where(Alert.fingerprint.in_(values))
+        return {alert.fingerprint: alert for alert in self._session.scalars(stmt)}
 
     def list_current(self) -> list[Alert]:
         stmt = (

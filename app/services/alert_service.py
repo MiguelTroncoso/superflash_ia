@@ -55,10 +55,13 @@ class AlertService:
         """Upserta reglas activas y resuelve las que dejaron de cumplirse."""
         fingerprints: set[str] = set()
         current: list[AlertRead] = []
+        existing = self._alerts.map_by_fingerprints(
+            f"{candidate.server_id}:{candidate.type.value}" for candidate in candidates
+        )
         for candidate in candidates:
             fingerprint = f"{candidate.server_id}:{candidate.type.value}"
             fingerprints.add(fingerprint)
-            alert = self._alerts.get_by_fingerprint(fingerprint)
+            alert = existing.get(fingerprint)
             fields = {
                 "fingerprint": fingerprint,
                 "type": candidate.type.value,

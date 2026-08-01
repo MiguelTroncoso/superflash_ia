@@ -73,6 +73,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [
