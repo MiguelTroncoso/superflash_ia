@@ -49,6 +49,9 @@ def main(argv: list[str] | None = None) -> int:
             adapter,
             triggered_by=CollectionTrigger.MANUAL,
             timeout_seconds=settings.collection_timeout_seconds,
+            event_inactive_grace_hours=settings.event_inactive_grace_hours,
+            event_archive_days=settings.event_archive_days,
+            permanent_archive_days=settings.permanent_archive_days,
         )
     except CollectionAlreadyRunningError:
         logger.error("ya hay una recolección en curso; no se inició otra")

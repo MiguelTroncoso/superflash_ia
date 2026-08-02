@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, to_utc
 from app.api.pagination import NEXT_CURSOR_HEADER, decode_cursor, encode_cursor
-from app.models.channel import Channel, ChannelMetric
+from app.models.channel import Channel, ChannelEvent, ChannelMetric, ChannelType, TechnicalStream
 from app.models.server import Server
 from app.repositories.channel_repository import ChannelRepository
 from app.schemas.channel import ChannelListItem, ChannelMetricRead, ChannelPage, ChannelRead
@@ -40,6 +40,20 @@ def list_channels(
     category: Annotated[
         str | None, Query(max_length=100, description="Filtra por categoría")
     ] = None,
+    category_id: Annotated[
+        str | None, Query(max_length=100, description="Filtra por identificador de categoría")
+    ] = None,
+    source_id: Annotated[str | None, Query(max_length=120, description="Filtra por fuente")] = None,
+    channel_type: Annotated[
+        ChannelType | None, Query(description="Filtra por tipo de canal")
+    ] = None,
+    active: Annotated[bool | None, Query(description="Filtra por actividad actual")] = None,
+    event_start_from: Annotated[
+        datetime | None, Query(description="Inicio de fecha del evento (ISO 8601)")
+    ] = None,
+    event_start_to: Annotated[
+        datetime | None, Query(description="Fin de fecha del evento (ISO 8601)")
+    ] = None,
     enabled: Annotated[bool | None, Query(description="Filtra por estado habilitado")] = None,
 ) -> ChannelPage:
     """Lista canales paginados con servidor y última métrica."""
@@ -49,12 +63,21 @@ def list_channels(
         search=search,
         server_id=server_id,
         category=category,
+        category_id=category_id,
+        source_id=source_id,
+        channel_type=channel_type,
+        active=active,
+        event_start_from=to_utc(event_start_from),
+        event_start_to=to_utc(event_start_to),
         enabled=enabled,
         sort_by=sort_by,
         sort_order=sort_order,
     )
     return ChannelPage(
-        items=[_channel_list_item(channel, server, metric) for channel, server, metric in rows],
+        items=[
+            _channel_list_item(channel, server, metric, event, stream)
+            for channel, server, metric, event, stream in rows
+        ],
         page=page,
         page_size=page_size,
         total=total,
@@ -66,11 +89,17 @@ def _channel_list_item(
     channel: Channel,
     server: Server | None,
     metric: ChannelMetric | None,
+    event: ChannelEvent | None,
+    stream: TechnicalStream | None,
 ) -> ChannelListItem:
     latest_metric = ChannelMetricRead.model_validate(metric) if metric is not None else None
     return ChannelListItem(
         **ChannelRead.model_validate(channel).model_dump(),
         current_server_name=server.name if server is not None else None,
+        event_external_id=event.external_id if event is not None else None,
+        event_name=event.name if event is not None else None,
+        technical_stream_external_id=stream.external_id if stream is not None else None,
+        technical_stream_name=stream.name if stream is not None else None,
         latest_metric=latest_metric,
         viewers=metric.viewers if metric is not None else None,
         bitrate_mbps=metric.bitrate_mbps if metric is not None else None,

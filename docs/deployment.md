@@ -135,6 +135,9 @@ La configuración inicial mantiene:
 - `SCHEDULER_ENABLED=true` con una sola instancia API.
 - `CORS_ORIGINS` vacío.
 - `PROMETHEUS_BEARER_TOKEN` vacío y sin inventario real.
+- `EVENT_INACTIVE_GRACE_HOURS=6`, `EVENT_ARCHIVE_DAYS=7` y
+  `PERMANENT_ARCHIVE_DAYS=30`; ajusta estas ventanas según la política de
+  retención de canales Xtream antes de habilitar una fuente real.
 
 ## Despliegue inicial
 

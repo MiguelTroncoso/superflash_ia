@@ -60,7 +60,10 @@ class StreamingChannelMetricSnapshot(BaseModel):
     """Muestra de métricas de audiencia entregada por una fuente de streaming."""
 
     channel_external_id: str
+    source_id: str | None = Field(default=None, min_length=1, max_length=120)
     server_external_id: str | None = None
+    event_external_id: str | None = Field(default=None, max_length=200)
+    technical_stream_external_id: str | None = Field(default=None, max_length=200)
     collected_at: datetime
     viewers: int = Field(ge=0)
     bitrate_mbps: float | None = Field(default=None, ge=0)

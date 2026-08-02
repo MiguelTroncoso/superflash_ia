@@ -171,7 +171,7 @@ overview y el endpoint de estado.
 | GET  | `/api/v1/servers` | Lista de servidores |
 | GET  | `/api/v1/servers/{id}` | Detalle de un servidor |
 | GET  | `/api/v1/servers/{id}/metrics` | Histórico (`start`, `end`, `limit`) |
-| GET  | `/api/v1/channels` | Canales (filtros `server_id`, `category`, `enabled`) |
+| GET  | `/api/v1/channels` | Canales dinámicos paginados (filtros `server_id`, `source_id`, `category`, `category_id`, `channel_type`, `active`, fecha de evento, `enabled`) |
 | GET  | `/api/v1/channels/{id}/metrics` | Histórico del canal (`start`, `end`, `limit`, `cursor`) |
 | POST | `/api/v1/collection/run` | Ejecuta una recolección (409 si ya hay una en curso) |
 | GET  | `/api/v1/collection/status` | Estado persistido del recolector y del scheduler |
@@ -194,6 +194,24 @@ aceptan `cursor` y devuelven, cuando hay más resultados, la cabecera
 `X-Next-Cursor` con el cursor opaco de la página siguiente. El cuerpo
 sigue siendo la lista de siempre: los clientes que solo usan `limit`
 funcionan sin cambios. Un cursor malformado responde `400`.
+
+### Canales dinámicos y eventos
+
+Los canales se identifican por `source_id + external_id`; el nombre nunca
+es una identidad. Cada canal puede ser `permanent`, `event`, `temporary`,
+`scheduled` o `archived`. La sincronización conserva el historial de
+métricas y categorías cuando un evento cambia de nombre o desaparece de la
+fuente Xtream:
+
+- una ausencia marca el canal como `active=false` y no borra datos;
+- una reaparición reactiva la misma fila, sin duplicarla;
+- el archivado se aplica después de `EVENT_INACTIVE_GRACE_HOURS` y de la
+  retención configurada (`EVENT_ARCHIVE_DAYS` o `PERMANENT_ARCHIVE_DAYS`);
+- eventos y streams técnicos son entidades separadas, de modo que un mismo
+  stream técnico puede reutilizarse para eventos de fechas diferentes.
+
+Cada recolección devuelve y persiste contadores de `created`, `updated`,
+`reactivated`, `deactivated`, `archived`, `unchanged` y `failed`.
 
 ### Retención del histórico
 

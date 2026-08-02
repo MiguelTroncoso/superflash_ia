@@ -31,6 +31,9 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             adapter_factory=lambda session: get_adapter(settings, session),
             runner=get_collection_runner(),
             collection_timeout_seconds=settings.collection_timeout_seconds,
+            event_inactive_grace_hours=settings.event_inactive_grace_hours,
+            event_archive_days=settings.event_archive_days,
+            permanent_archive_days=settings.permanent_archive_days,
         )
         scheduler.start()
         set_active_scheduler(scheduler)

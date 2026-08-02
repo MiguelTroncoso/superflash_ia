@@ -76,6 +76,13 @@ class CollectionRunRepository:
         run.server_metrics_skipped = result.server_metrics_skipped
         run.channel_metrics_inserted = result.channel_metrics_inserted
         run.channel_metrics_skipped = result.channel_metrics_skipped
+        run.channels_created = result.channels_created
+        run.channels_updated = result.channels_updated
+        run.channels_reactivated = result.channels_reactivated
+        run.channels_deactivated = result.channels_deactivated
+        run.channels_archived = result.channels_archived
+        run.channels_unchanged = result.channels_unchanged
+        run.channels_failed = result.channels_failed
         run.errors = list(result.errors)
         self._session.flush()
 

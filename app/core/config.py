@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     # la limpieza jamás corre sin este valor configurado explícitamente.
     metrics_retention_days: int | None = Field(default=None, ge=1)
 
+    # Retención del inventario dinámico de canales/eventos. Los canales se
+    # marcan inactivos de inmediato; estas ventanas controlan cuándo pueden
+    # pasar a archivados.
+    event_inactive_grace_hours: int = Field(default=6, ge=0, le=24 * 30)
+    event_archive_days: int = Field(default=7, ge=1, le=3650)
+    permanent_archive_days: int = Field(default=30, ge=1, le=3650)
+
     # Umbrales de las alertas internas de solo lectura (GET /api/v1/alerts).
     alert_cpu_percent: float = Field(default=90.0, gt=0, le=100)
     alert_memory_percent: float = Field(default=90.0, gt=0, le=100)
