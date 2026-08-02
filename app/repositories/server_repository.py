@@ -1,11 +1,14 @@
 """Acceso a datos de servidores y sus métricas."""
 
 from datetime import datetime
+from typing import Any, cast
 
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, desc, func, or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.adapters.base import ServerSnapshot
+from app.models.alert import Alert, AlertStatus
 from app.models.server import Server, ServerMetric
 
 
@@ -20,6 +23,137 @@ class ServerRepository:
         stmt = select(Server).order_by(Server.name)
         return list(self._session.scalars(stmt))
 
+    def list_page(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        search: str | None = None,
+        status: str | None = None,
+        provider: str | None = None,
+        group: str | None = None,
+        enabled: bool | None = None,
+        sort_by: str = "name",
+        sort_order: str = "asc",
+    ) -> tuple[list[tuple[Server, ServerMetric | None, int]], int]:
+        """Devuelve una página con última métrica y alertas activas agregadas.
+
+        La consulta de datos usa subconsultas para seleccionar una sola muestra
+        por servidor y un resumen agrupado de alertas. No consulta por fila.
+        """
+        filters = self._page_filters(
+            search=search,
+            status=status,
+            provider=provider,
+            group=group,
+            enabled=enabled,
+        )
+        total = self._session.scalar(select(func.count(Server.id)).where(*filters)) or 0
+
+        latest = (
+            select(
+                ServerMetric.server_id,
+                func.max(ServerMetric.collected_at).label("max_collected_at"),
+            )
+            .group_by(ServerMetric.server_id)
+            .subquery()
+        )
+        active_alerts = (
+            select(
+                Alert.server_id,
+                func.count(Alert.id).label("active_alert_count"),
+            )
+            .where(Alert.status != AlertStatus.RESOLVED)
+            .group_by(Alert.server_id)
+            .subquery()
+        )
+        metric_join = and_(
+            ServerMetric.server_id == Server.id,
+            ServerMetric.server_id == latest.c.server_id,
+            ServerMetric.collected_at == latest.c.max_collected_at,
+        )
+        stmt = (
+            select(
+                Server,
+                ServerMetric,
+                func.coalesce(active_alerts.c.active_alert_count, 0),
+            )
+            .select_from(Server)
+            .outerjoin(latest, latest.c.server_id == Server.id)
+            .outerjoin(ServerMetric, metric_join)
+            .outerjoin(active_alerts, active_alerts.c.server_id == Server.id)
+            .where(*filters)
+            .order_by(*self._sort_expressions(sort_by, sort_order))
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        rows = [(row[0], row[1], int(row[2])) for row in self._session.execute(stmt).all()]
+        return rows, int(total)
+
+    @staticmethod
+    def _page_filters(
+        *,
+        search: str | None,
+        status: str | None,
+        provider: str | None,
+        group: str | None,
+        enabled: bool | None,
+    ) -> list[ColumnElement[bool]]:
+        filters: list[ColumnElement[bool]] = []
+        if search:
+            term = f"%{search.strip()}%"
+            filters.append(
+                or_(
+                    Server.name.ilike(term),
+                    Server.hostname.ilike(term),
+                    Server.external_id.ilike(term),
+                    Server.country.ilike(term),
+                )
+            )
+        if status is not None:
+            filters.append(Server.status == status)
+        if provider is not None:
+            filters.append(Server.provider == provider)
+        if group is not None:
+            filters.append(Server.group == group)
+        if enabled is not None:
+            filters.append(Server.enabled.is_(enabled))
+        return filters
+
+    @staticmethod
+    def _sort_expressions(sort_by: str, sort_order: str) -> tuple[ColumnElement[Any], ...]:
+        fields: dict[str, Any] = {
+            "name": Server.name,
+            "status": Server.status,
+            "provider": Server.provider,
+            "group": Server.group,
+            "country": Server.country,
+            "created_at": Server.created_at,
+            "updated_at": Server.updated_at,
+            "cpu": ServerMetric.cpu_percent,
+            "memory": ServerMetric.memory_percent,
+            "disk": ServerMetric.disk_percent,
+            "network": ServerMetric.output_mbps,
+            "uptime": ServerMetric.uptime_seconds,
+            "last_updated_at": ServerMetric.collected_at,
+        }
+        expression = cast(ColumnElement[Any], fields[sort_by])
+        ordered = (
+            expression.desc().nulls_last()
+            if sort_order == "desc"
+            else expression.asc().nulls_last()
+        )
+        return ordered, Server.id.asc()
+
+    def list_enabled_with_prometheus(self) -> list[Server]:
+        """Devuelve targets habilitados con URL Prometheus configurada."""
+        stmt = (
+            select(Server)
+            .where(Server.enabled.is_(True), Server.prometheus_url.is_not(None))
+            .order_by(Server.name)
+        )
+        return list(self._session.scalars(stmt))
+
     def get(self, server_id: int) -> Server | None:
         """Busca un servidor por su id interno."""
         return self._session.get(Server, server_id)
@@ -28,6 +162,25 @@ class ServerRepository:
         """Busca un servidor por su identificador externo."""
         stmt = select(Server).where(Server.external_id == external_id)
         return self._session.scalars(stmt).first()
+
+    def create(self, fields: dict[str, object]) -> Server:
+        """Crea un servidor administrado desde el inventario."""
+        server = Server(**fields)
+        self._session.add(server)
+        self._session.flush()
+        return server
+
+    def update(self, server: Server, fields: dict[str, object]) -> Server:
+        """Actualiza únicamente los campos enviados por el cliente."""
+        for name, value in fields.items():
+            setattr(server, name, value)
+        self._session.flush()
+        return server
+
+    def delete(self, server: Server) -> None:
+        """Elimina un servidor y sus métricas por la relación configurada."""
+        self._session.delete(server)
+        self._session.flush()
 
     def upsert_from_snapshot(self, snapshot: ServerSnapshot) -> Server:
         """Crea o actualiza un servidor identificado por ``external_id``."""
@@ -115,3 +268,45 @@ class ServerRepository:
         """Número de servidores habilitados."""
         stmt = select(func.count()).select_from(Server).where(Server.enabled.is_(True))
         return self._session.scalars(stmt).one()
+
+    def recent_history(
+        self, limit: int = 24
+    ) -> list[tuple[datetime, float | None, float | None, float | None, float, float]]:
+        """Agrega una ventana histórica común sin cargar métricas por servidor."""
+        recent_timestamps = (
+            select(ServerMetric.collected_at)
+            .join(Server, ServerMetric.server_id == Server.id)
+            .where(Server.enabled.is_(True))
+            .distinct()
+            .order_by(desc(ServerMetric.collected_at))
+            .limit(limit)
+            .subquery()
+        )
+        stmt = (
+            select(
+                ServerMetric.collected_at,
+                func.avg(ServerMetric.cpu_percent),
+                func.avg(ServerMetric.memory_percent),
+                func.avg(ServerMetric.disk_percent),
+                func.sum(ServerMetric.input_mbps),
+                func.sum(ServerMetric.output_mbps),
+            )
+            .join(Server, ServerMetric.server_id == Server.id)
+            .where(
+                Server.enabled.is_(True),
+                ServerMetric.collected_at.in_(select(recent_timestamps.c.collected_at)),
+            )
+            .group_by(ServerMetric.collected_at)
+            .order_by(ServerMetric.collected_at.asc())
+        )
+        return [
+            (
+                row[0],
+                float(row[1]) if row[1] is not None else None,
+                float(row[2]) if row[2] is not None else None,
+                float(row[3]) if row[3] is not None else None,
+                float(row[4] or 0),
+                float(row[5] or 0),
+            )
+            for row in self._session.execute(stmt).all()
+        ]

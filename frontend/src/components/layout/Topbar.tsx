@@ -1,5 +1,5 @@
 import { Bell, ChevronDown, Menu, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react'
-import { useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router'
 import { useUiStore } from '../../store/uiStore'
 import { cn } from '../../utils/formatters'
 
@@ -8,6 +8,8 @@ const pageNames: Record<string, string> = {
   '/servers': 'Servers',
   '/channels': 'Channels',
   '/alerts': 'Alerts',
+  '/balance': 'Balance',
+  '/recommendations': 'Recommendations',
   '/settings': 'Settings',
 }
 

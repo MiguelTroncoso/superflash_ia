@@ -23,9 +23,10 @@ const StateIcon: Record<HealthState, typeof CheckCircle2> = {
 interface StatusBadgeProps {
   state: HealthState
   compact?: boolean
+  label?: string
 }
 
-export function StatusBadge({ state, compact = false }: StatusBadgeProps): React.JSX.Element {
+export function StatusBadge({ state, compact = false, label }: StatusBadgeProps): React.JSX.Element {
   const Icon = StateIcon[state]
 
   return (
@@ -36,7 +37,7 @@ export function StatusBadge({ state, compact = false }: StatusBadgeProps): React
       )}
     >
       <Icon size={compact ? 12 : 14} strokeWidth={2.2} />
-      {!compact && stateCopy[state]}
+      {!compact && (label ?? stateCopy[state])}
     </span>
   )
 }

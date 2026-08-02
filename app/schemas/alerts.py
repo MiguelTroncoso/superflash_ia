@@ -5,6 +5,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.models.alert import AlertSeverity, AlertStatus
+
 
 class AlertType(enum.StrEnum):
     """Tipos de alerta evaluados sobre la última muestra de cada servidor."""
@@ -19,7 +21,10 @@ class AlertType(enum.StrEnum):
 class AlertRead(BaseModel):
     """Una alerta activa sobre un servidor."""
 
+    id: int | None = None
     type: AlertType
+    severity: AlertSeverity = AlertSeverity.WARNING
+    status: AlertStatus = AlertStatus.ACTIVE
     server_id: int
     server_name: str
     message: str
@@ -28,6 +33,10 @@ class AlertRead(BaseModel):
     value: float | None = None
     threshold: float | None = None
     collected_at: datetime | None = None
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    acknowledged_at: datetime | None = None
+    resolved_at: datetime | None = None
 
 
 class AlertsRead(BaseModel):
@@ -35,3 +44,9 @@ class AlertsRead(BaseModel):
 
     generated_at: datetime
     alerts: list[AlertRead]
+
+
+class AlertUpdate(BaseModel):
+    """Cambio permitido en el ciclo de vida de una alerta."""
+
+    status: AlertStatus

@@ -1,31 +1,83 @@
 """Endpoints de consulta de canales y su histórico de métricas."""
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, to_utc
 from app.api.pagination import NEXT_CURSOR_HEADER, decode_cursor, encode_cursor
+from app.models.channel import Channel, ChannelMetric
+from app.models.server import Server
 from app.repositories.channel_repository import ChannelRepository
-from app.schemas.channel import ChannelMetricRead, ChannelRead
+from app.schemas.channel import ChannelListItem, ChannelMetricRead, ChannelPage, ChannelRead
 
 router = APIRouter(prefix="/channels", tags=["channels"])
 
 
-@router.get("", response_model=list[ChannelRead])
+@router.get("", response_model=ChannelPage)
 def list_channels(
     session: Annotated[Session, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    search: Annotated[str | None, Query(max_length=200)] = None,
+    sort_by: Annotated[
+        Literal[
+            "name",
+            "category",
+            "server",
+            "viewers",
+            "bitrate",
+            "output",
+            "status",
+            "last_updated_at",
+        ],
+        Query(),
+    ] = "name",
+    sort_order: Annotated[Literal["asc", "desc"], Query()] = "asc",
     server_id: Annotated[int | None, Query(description="Filtra por servidor actual")] = None,
-    category: Annotated[str | None, Query(description="Filtra por categoría")] = None,
+    category: Annotated[
+        str | None, Query(max_length=100, description="Filtra por categoría")
+    ] = None,
     enabled: Annotated[bool | None, Query(description="Filtra por estado habilitado")] = None,
-) -> list[ChannelRead]:
-    """Lista canales con filtros opcionales."""
-    channels = ChannelRepository(session).list_filtered(
-        server_id=server_id, category=category, enabled=enabled
+) -> ChannelPage:
+    """Lista canales paginados con servidor y última métrica."""
+    rows, total = ChannelRepository(session).list_page(
+        page=page,
+        page_size=page_size,
+        search=search,
+        server_id=server_id,
+        category=category,
+        enabled=enabled,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
-    return [ChannelRead.model_validate(channel) for channel in channels]
+    return ChannelPage(
+        items=[_channel_list_item(channel, server, metric) for channel, server, metric in rows],
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=(total + page_size - 1) // page_size,
+    )
+
+
+def _channel_list_item(
+    channel: Channel,
+    server: Server | None,
+    metric: ChannelMetric | None,
+) -> ChannelListItem:
+    latest_metric = ChannelMetricRead.model_validate(metric) if metric is not None else None
+    return ChannelListItem(
+        **ChannelRead.model_validate(channel).model_dump(),
+        current_server_name=server.name if server is not None else None,
+        latest_metric=latest_metric,
+        viewers=metric.viewers if metric is not None else None,
+        bitrate_mbps=metric.bitrate_mbps if metric is not None else None,
+        estimated_output_mbps=metric.estimated_output_mbps if metric is not None else None,
+        status=metric.status if metric is not None else None,
+        last_updated_at=metric.collected_at if metric is not None else channel.updated_at,
+    )
 
 
 @router.get("/{channel_id}/metrics", response_model=list[ChannelMetricRead])

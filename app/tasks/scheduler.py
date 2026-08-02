@@ -14,6 +14,7 @@ contenedor dedicado) o un lock distribuido; ver docs/architecture.md.
 
 import asyncio
 import contextlib
+import inspect
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -34,7 +35,7 @@ class CollectionScheduler:
         self,
         interval_seconds: float,
         session_factory: sessionmaker[Session],
-        adapter_factory: Callable[[], MonitoringSourceAdapter],
+        adapter_factory: Callable[..., MonitoringSourceAdapter],
         runner: CollectionRunner,
         collection_timeout_seconds: float = 600.0,
     ) -> None:
@@ -95,7 +96,7 @@ class CollectionScheduler:
         try:
             self._runner.run(
                 session,
-                self._adapter_factory(),
+                self._build_adapter(session),
                 triggered_by=CollectionTrigger.SCHEDULER,
                 timeout_seconds=self._collection_timeout_seconds,
             )
@@ -105,6 +106,12 @@ class CollectionScheduler:
             logger.exception("scheduler: la recolección periódica falló")
         finally:
             session.close()
+
+    def _build_adapter(self, session: Session) -> MonitoringSourceAdapter:
+        """Crea el adapter con sesión DB y conserva factories legacy sin argumentos."""
+        if len(inspect.signature(self._adapter_factory).parameters) == 0:
+            return self._adapter_factory()
+        return self._adapter_factory(session)
 
 
 _active_scheduler: CollectionScheduler | None = None

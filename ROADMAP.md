@@ -18,7 +18,7 @@ evitar acoplar el frontend directamente al dominio o a una fuente externa.
 
 ## 2. Backend
 
-**Estado: Fase 1 implementada**
+**Estado: núcleo v1 implementado**
 
 - [x] FastAPI modular con configuración tipada.
 - [x] Persistencia PostgreSQL con SQLAlchemy y Alembic.
@@ -26,6 +26,10 @@ evitar acoplar el frontend directamente al dominio o a una fuente externa.
 - [x] Adaptador mock determinista.
 - [x] Históricos de servidores, canales y ejecuciones.
 - [x] API key para endpoints internos y healthcheck público.
+- [x] Inventario CRUD de servidores con proveedor, datacenter, grupo, etiquetas,
+  tipo, red, Prometheus y heartbeat.
+- [x] Provider Prometheus por servidor, manteniendo adapter mock compatible.
+- [x] Migraciones para inventario, métricas extendidas y alertas persistentes.
 - [ ] Versionado formal de contratos API.
 - [ ] Pruebas de contrato compartidas con el frontend.
 - [ ] Definir una estrategia de ejecución del scheduler cuando existan
@@ -33,68 +37,72 @@ evitar acoplar el frontend directamente al dominio o a una fuente externa.
 
 ## 3. Frontend
 
-**Estado: fundación visual implementada**
+**Estado: foundation conectada a API**
 
 - [x] React 19 + Vite + TypeScript.
 - [x] React Router con rutas Dashboard, Servers, Channels, Alerts y Settings.
 - [x] Shell responsive con Sidebar, Topbar y layout principal.
 - [x] Tema oscuro y tokens visuales base con TailwindCSS.
 - [x] Estado de UI inicial con Zustand.
-- [x] Fronteras preparadas para TanStack Query y Axios sin requests.
+- [x] Servicios tipados y hooks TanStack Query por recurso.
+- [x] Tabla y detalle de servidores, canales, balance, recomendaciones y alertas.
+- [x] Estados loading, empty, error, stale, última actualización y retry.
 - [ ] Definir sistema de diseño compartido y accesibilidad AA.
 - [ ] Añadir testing de componentes y navegación.
 - [ ] Añadir manejo de errores y estados loading/empty/error.
 
 ## 4. Dashboard
 
-**Estado: placeholders mock**
+**Estado: datos reales de lectura**
 
 - [x] Tarjetas de CPU, RAM, disco, Network IN y Network OUT.
 - [x] Tarjetas de servidores, canales, alertas y estado general.
-- [x] Gráficos mock de carga y tráfico con Recharts.
+- [x] Gráficos de carga y tráfico con las últimas 24 muestras reales.
 - [x] Actividad reciente y tabla de salud de servidores.
-- [ ] Conectar métricas reales con un selector de rango temporal.
+- [ ] Conectar métricas reales con selector de rango temporal y agregaciones.
 - [ ] Añadir drill-down de servidor y canal.
 - [ ] Diseñar estados de carga, vacío y datos obsoletos.
 
 ## 5. Integración API
 
-**Estado: pendiente**
+**Estado: integración inicial implementada**
 
-- [ ] Acordar contratos de lectura entre FastAPI y frontend.
-- [ ] Implementar funciones tipadas en `frontend/src/services/`.
-- [ ] Crear hooks TanStack Query por recurso.
-- [ ] Configurar autenticación de lectura sin exponer secretos en el bundle.
-- [ ] Manejar cache, invalidación, retries y errores de red.
+- [x] Contratos de lectura entre FastAPI y frontend.
+- [x] Funciones tipadas en `frontend/src/services/`.
+- [x] Hooks TanStack Query por recurso.
+- [x] Proxy con `X-API-Key` server-side sin exponer secretos en el bundle.
+- [x] Cache, refresh, retries y errores de red.
 - [ ] Añadir un entorno local explícito para el proxy de Vite.
 
 ## 6. Métricas
 
-**Estado: pendiente**
+**Estado: señales v1 implementadas**
 
-- [ ] Servidores: CPU, RAM, disco, red, uptime y capacidad.
-- [ ] Canales: viewers, bitrate, estado y output estimado.
+- [x] Servidores: CPU, RAM, swap, filesystem, IO, red, load, uptime y capacidad.
+- [x] Canales: viewers, bitrate, estado y output estimado.
 - [ ] Históricos con rangos, agregaciones y paginación.
 - [ ] Comparación entre periodos y detección de datos obsoletos.
 - [ ] Optimizar visualizaciones para datasets grandes.
 
 ## 7. Alertas
 
-**Estado: contrato inicial en backend; UI mock**
+**Estado: persistencia y UI conectadas**
 
 - [x] Umbrales internos de solo lectura en el backend.
-- [x] Vista placeholder de alertas en el frontend.
-- [ ] Consumir alertas reales con severidad y timestamps.
-- [ ] Filtros por severidad, recurso, estado y periodo.
+- [x] Vista de alertas persistidas en el frontend.
+- [x] Alertas reales con severidad, estado y timestamps.
+- [x] Filtros por estado y contexto de servidor.
 - [ ] Detalle de causa y contexto histórico.
 - [ ] Integrar notificaciones externas solo después de definir permisos y
   auditoría.
 
 ## 8. Optimizer
 
-**Estado: diseño futuro**
+**Estado: balance y reglas iniciales implementados**
 
-- [ ] Calcular capacidad disponible por servidor.
+- [x] Calcular capacidad disponible por servidor.
+- [x] Exponer `/api/v1/balance` y `/api/v1/recommendations`.
+- [x] Reglas explicables para saturación, heartbeat, ausencia de datos y baja utilización.
 - [ ] Simular escenarios de distribución de canales.
 - [ ] Generar recomendaciones explicables y solo informativas.
 - [ ] Mostrar impacto estimado, confianza y datos usados.

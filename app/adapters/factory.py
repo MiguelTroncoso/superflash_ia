@@ -7,6 +7,8 @@ exclusivamente de variables de entorno declaradas en ``Settings`` — nunca
 del código ni del repositorio. Ver docs/real-source-integration.md.
 """
 
+from sqlalchemy.orm import Session
+
 from app.adapters.base import MonitoringSourceAdapter
 from app.adapters.composite import CompositeMonitoringAdapter
 from app.adapters.inventory import load_inventory
@@ -15,9 +17,12 @@ from app.adapters.mock_sources import MockInfrastructureAdapter, MockStreamingAd
 from app.adapters.prometheus import PrometheusInfrastructureAdapter
 from app.adapters.sources import InfrastructureMetricsAdapter, StreamingMetricsAdapter
 from app.core.config import Settings
+from app.repositories.server_repository import ServerRepository
 
 
-def get_infrastructure_adapter(settings: Settings) -> InfrastructureMetricsAdapter:
+def get_infrastructure_adapter(
+    settings: Settings, session: Session | None = None
+) -> InfrastructureMetricsAdapter:
     """Construye la fuente de infraestructura configurada.
 
     Raises:
@@ -27,6 +32,14 @@ def get_infrastructure_adapter(settings: Settings) -> InfrastructureMetricsAdapt
     if settings.infrastructure_source == "mock":
         return MockInfrastructureAdapter(seed=settings.mock_seed)
     if settings.infrastructure_source == "prometheus":
+        if session is not None:
+            from app.adapters.prometheus import DatabasePrometheusInfrastructureAdapter
+
+            return DatabasePrometheusInfrastructureAdapter(
+                ServerRepository(session).list_enabled_with_prometheus(),
+                timeout_seconds=settings.prometheus_timeout_seconds,
+                verify_tls=settings.prometheus_tls_verify,
+            )
         if not settings.prometheus_url:
             raise ValueError("INFRASTRUCTURE_SOURCE=prometheus requiere PROMETHEUS_URL configurada")
         if not settings.infrastructure_inventory_file:
@@ -56,7 +69,7 @@ def get_streaming_adapter(settings: Settings) -> StreamingMetricsAdapter:
     raise ValueError(f"Fuente de streaming no soportada: {settings.streaming_source!r}")
 
 
-def get_adapter(settings: Settings) -> MonitoringSourceAdapter:
+def get_adapter(settings: Settings, session: Session | None = None) -> MonitoringSourceAdapter:
     """Construye el adaptador que alimenta la recolección.
 
     - ``mock`` (por defecto): el adaptador combinado histórico.
@@ -70,7 +83,7 @@ def get_adapter(settings: Settings) -> MonitoringSourceAdapter:
         return MockMonitoringAdapter(seed=settings.mock_seed)
     if settings.monitoring_adapter == "composite":
         return CompositeMonitoringAdapter(
-            infrastructure=get_infrastructure_adapter(settings),
+            infrastructure=get_infrastructure_adapter(settings, session),
             streaming=get_streaming_adapter(settings),
         )
     raise ValueError(f"Adaptador de monitoreo no soportado: {settings.monitoring_adapter!r}")

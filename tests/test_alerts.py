@@ -82,6 +82,26 @@ def test_threshold_alerts_for_cpu_memory_disk_network(client, session):
     assert alerts["high_network_utilization"][0]["server_name"] == "Caliente"
 
 
+def test_alerts_are_persisted_and_can_be_acknowledged(client, session):
+    """Las alertas conservan identidad y estado acknowledged entre lecturas."""
+    server = _add_server(session, "srv-persisted", "Persistente", capacity=1000.0)
+    _add_metric(session, server, cpu=96.0, memory=30.0, disk=40.0, output=100.0)
+    session.commit()
+
+    first = client.get("/api/v1/alerts").json()["alerts"]
+    cpu_alert = next(item for item in first if item["type"] == "high_cpu")
+    acknowledged = client.patch(
+        f"/api/v1/alerts/{cpu_alert['id']}", json={"status": "acknowledged"}
+    )
+    assert acknowledged.status_code == 200
+    assert acknowledged.json()["status"] == "acknowledged"
+
+    second = client.get("/api/v1/alerts").json()["alerts"]
+    same_alert = next(item for item in second if item["type"] == "high_cpu")
+    assert same_alert["id"] == cpu_alert["id"]
+    assert same_alert["status"] == "acknowledged"
+
+
 def test_stale_server_alert(client, session):
     """Un servidor sin muestra reciente genera alerta de obsolescencia."""
     stale = _add_server(session, "srv-stale", "Obsoleto")

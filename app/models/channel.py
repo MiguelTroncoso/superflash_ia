@@ -37,7 +37,7 @@ class Channel(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     external_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
-    name: Mapped[str] = mapped_column(String(200))
+    name: Mapped[str] = mapped_column(String(200), index=True)
     category: Mapped[str | None] = mapped_column(String(100), index=True)
     current_server_id: Mapped[int | None] = mapped_column(
         ForeignKey("servers.id", ondelete="SET NULL"), index=True

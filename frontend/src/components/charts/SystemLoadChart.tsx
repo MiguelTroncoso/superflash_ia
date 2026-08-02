@@ -8,13 +8,22 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { loadSeries } from '../../utils/mockData'
+import type { DashboardHistoryPoint } from '../../utils/dashboardMetrics'
 
-export function SystemLoadChart(): React.JSX.Element {
+interface SystemLoadChartProps {
+  data: DashboardHistoryPoint[]
+}
+
+export function SystemLoadChart({ data }: SystemLoadChartProps): React.JSX.Element {
   return (
     <div className="h-[280px] w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={loadSeries} margin={{ top: 10, right: 4, left: -22, bottom: 0 }}>
+      {data.length === 0 ? (
+        <div className="flex h-full items-center justify-center text-xs text-muted">
+          No historical metrics available
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 10, right: 4, left: -22, bottom: 0 }}>
           <defs>
             <linearGradient id="cpuGradient" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#38bdf8" stopOpacity={0.35} />
@@ -71,8 +80,9 @@ export function SystemLoadChart(): React.JSX.Element {
             strokeWidth={2}
             fill="url(#memoryGradient)"
           />
-        </AreaChart>
-      </ResponsiveContainer>
+          </AreaChart>
+        </ResponsiveContainer>
+      )}
     </div>
   )
 }

@@ -127,9 +127,12 @@ def main() -> int:
 
         # 5. Endpoints de consulta.
         status, servers = request("GET", "/api/v1/servers", auth)
-        check(status == 200 and len(servers) >= 4, "listado de servidores disponible")
+        check(
+            status == 200 and isinstance(servers, dict) and len(servers.get("items", [])) >= 4,
+            "listado paginado de servidores disponible",
+        )
 
-        server_id = servers[0]["id"]
+        server_id = servers["items"][0]["id"]
         status, metrics = request("GET", f"/api/v1/servers/{server_id}/metrics?limit=1", auth)
         check(status == 200 and len(metrics) == 1, "histórico de métricas consultable")
 

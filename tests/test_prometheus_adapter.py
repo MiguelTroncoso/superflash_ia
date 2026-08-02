@@ -19,6 +19,7 @@ from app.adapters.prometheus import (
 )
 from app.adapters.sources import ServerStatus
 from app.core.config import Settings
+from app.models import Server
 from tests.conftest import FIXED_NOW, make_test_settings
 from tests.prom_helpers import full_values, instance_of, metric_key_of, prom_empty, prom_json
 
@@ -91,8 +92,12 @@ def test_valid_responses_are_normalized():
     assert first.cpu_percent == 35.46  # redondeo a 2 decimales
     assert first.memory_percent == 61.2
     assert first.disk_percent == 72.9
+    assert first.filesystem_percent == 72.9
+    assert first.swap_percent == 18.5
     assert first.input_mbps == 120.5
     assert first.output_mbps == 850.75
+    assert first.io_read_mbps == 42.5
+    assert first.io_write_mbps == 21.25
     assert first.load_average_1m == 1.42
     assert first.uptime_seconds == 86_400  # normalizado a entero
     assert first.status is ServerStatus.ONLINE
@@ -240,6 +245,38 @@ def test_no_token_in_logs_during_partial_failures(caplog):
         adapter.get_infrastructure_metrics()
 
     assert TOKEN not in caplog.text
+
+
+def test_database_targets_use_their_own_prometheus_configuration():
+    """El provider administrado consulta targets y credenciales por servidor."""
+    from app.adapters.prometheus import DatabasePrometheusInfrastructureAdapter
+
+    server = Server(
+        external_id="srv-db",
+        name="DB server",
+        hostname="10.0.0.10",
+        network_capacity_mbps=1000,
+        prometheus_url="https://prometheus.db.internal",
+        prometheus_token=TOKEN,
+        enabled=True,
+    )
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.headers["Authorization"] == f"Bearer {TOKEN}"
+        key = metric_key_of(request.url.params["query"])
+        return httpx.Response(200, json=prom_json(full_values()[key]))
+
+    adapter = DatabasePrometheusInfrastructureAdapter(
+        [server], transport=httpx.MockTransport(handler), now_fn=_fixed_clock
+    )
+    metrics = adapter.get_infrastructure_metrics()
+
+    assert len(metrics) == 1
+    assert metrics[0].server_external_id == "srv-db"
+    assert requests
+    assert all("10.0.0.10:9100" in request.url.params["query"] for request in requests)
 
 
 # --- TLS y configuración -------------------------------------------------------

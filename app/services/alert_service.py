@@ -1,10 +1,4 @@
-"""Alertas internas de solo lectura, evaluadas bajo demanda.
-
-Se calculan sobre la última muestra persistida de cada servidor
-habilitado comparándola con los umbrales configurados. No se envían
-notificaciones externas ni se persiste nada: son un diagnóstico
-consultable por ``GET /api/v1/alerts``.
-"""
+"""Alertas internas persistidas y evaluadas contra las últimas métricas."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -12,24 +6,27 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.timeutils import ensure_utc
+from app.models.alert import Alert, AlertSeverity, AlertStatus
 from app.models.server import Server, ServerMetric
+from app.repositories.alert_repository import AlertRepository
 from app.repositories.server_repository import ServerRepository
 from app.schemas.alerts import AlertRead, AlertsRead, AlertType
 from app.services.overview_service import compute_network_utilization
 
 
 class AlertService:
-    """Evalúa los umbrales configurados contra las últimas muestras."""
+    """Evalúa umbrales y sincroniza el ciclo de vida de cada alerta."""
 
     def __init__(self, session: Session, settings: Settings) -> None:
+        self._session = session
         self._servers = ServerRepository(session)
+        self._alerts = AlertRepository(session)
         self._settings = settings
 
     def evaluate(self) -> AlertsRead:
-        """Calcula las alertas activas en este instante."""
+        """Calcula alertas activas y persiste sus transiciones."""
         now = datetime.now(UTC)
         alerts: list[AlertRead] = []
-
         latest_by_server = {
             server.id: (server, metric)
             for server, metric in self._servers.latest_metrics_for_enabled()
@@ -52,7 +49,83 @@ class AlertService:
             _, metric = entry
             alerts.extend(self._evaluate_metric(server, metric, now))
 
-        return AlertsRead(generated_at=now, alerts=alerts)
+        return AlertsRead(generated_at=now, alerts=self._sync(alerts, now))
+
+    def _sync(self, candidates: list[AlertRead], now: datetime) -> list[AlertRead]:
+        """Upserta reglas activas y resuelve las que dejaron de cumplirse."""
+        fingerprints: set[str] = set()
+        current: list[AlertRead] = []
+        existing = self._alerts.map_by_fingerprints(
+            f"{candidate.server_id}:{candidate.type.value}" for candidate in candidates
+        )
+        for candidate in candidates:
+            fingerprint = f"{candidate.server_id}:{candidate.type.value}"
+            fingerprints.add(fingerprint)
+            alert = existing.get(fingerprint)
+            fields = {
+                "fingerprint": fingerprint,
+                "type": candidate.type.value,
+                "severity": self._severity(candidate),
+                "server_id": candidate.server_id,
+                "server_name": candidate.server_name,
+                "message": candidate.message,
+                "value": candidate.value,
+                "threshold": candidate.threshold,
+                "collected_at": candidate.collected_at,
+                "last_seen_at": now,
+            }
+            if alert is None:
+                alert = self._alerts.create(
+                    {
+                        **fields,
+                        "status": AlertStatus.ACTIVE,
+                        "first_seen_at": now,
+                    }
+                )
+            else:
+                acknowledged = alert.status is AlertStatus.ACKNOWLEDGED
+                resolved = alert.status is AlertStatus.RESOLVED
+                for name, value in fields.items():
+                    setattr(alert, name, value)
+                if resolved:
+                    alert.status = AlertStatus.ACTIVE
+                    alert.acknowledged_at = None
+                    alert.resolved_at = None
+                elif not acknowledged:
+                    alert.status = AlertStatus.ACTIVE
+            current.append(self._read(alert))
+
+        for alert in self._alerts.list_current():
+            if alert.fingerprint not in fingerprints:
+                alert.status = AlertStatus.RESOLVED
+                alert.resolved_at = now
+        self._session.commit()
+        return current
+
+    @staticmethod
+    def _severity(candidate: AlertRead) -> AlertSeverity:
+        if candidate.type in {AlertType.HIGH_CPU, AlertType.HIGH_MEMORY, AlertType.HIGH_DISK}:
+            return AlertSeverity.CRITICAL if (candidate.value or 0) >= 95 else AlertSeverity.WARNING
+        return AlertSeverity.WARNING
+
+    @staticmethod
+    def _read(alert: Alert) -> AlertRead:
+        return AlertRead(
+            id=alert.id,
+            type=AlertType(alert.type),
+            severity=alert.severity,
+            status=alert.status,
+            server_id=alert.server_id,
+            server_name=alert.server_name,
+            message=alert.message,
+            value=alert.value,
+            threshold=alert.threshold,
+            collected_at=alert.collected_at,
+            first_seen_at=alert.first_seen_at,
+            last_seen_at=alert.last_seen_at,
+            acknowledged_at=alert.acknowledged_at,
+            resolved_at=alert.resolved_at,
+        )
 
     def _evaluate_metric(
         self, server: Server, metric: ServerMetric, now: datetime
@@ -93,8 +166,6 @@ class AlertService:
             ),
         ]
         for alert_type, value, threshold, label in checks:
-            # value None = la fuente no entrega ese dato (p. ej. disco en el
-            # mock combinado, o capacidad de red desconocida): no se alerta.
             if value is not None and value > threshold:
                 alerts.append(
                     AlertRead(

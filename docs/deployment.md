@@ -80,6 +80,20 @@ sudo docker run hello-world
 docker compose version
 ```
 
+Antes de desplegar, confirma que el VPS expone el subcomando moderno
+`docker compose` y conserva el resultado para la revisión del release:
+
+```bash
+docker compose version
+docker compose --env-file .env.production -f docker-compose.prod.yml config
+```
+
+El compose usa `depends_on.condition: service_completed_successfully` para
+mantener las migraciones como job one-shot y el secreto Compose
+`secrets.*.environment` para montar `API_KEY` únicamente en Nginx. Ambas
+capacidades deben estar disponibles en el plugin Compose del VPS; no se debe
+reemplazar `docker compose` por el binario legado `docker-compose`.
+
 Para usar Docker sin `sudo`, añade el usuario de despliegue al grupo Docker y
 abre una nueva sesión SSH:
 

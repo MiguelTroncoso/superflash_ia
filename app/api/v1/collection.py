@@ -37,7 +37,7 @@ def run_collection(
     recolección en curso (en este proceso o en otra instancia, vía
     advisory lock) responde 409 sin iniciar otra.
     """
-    adapter = get_adapter(settings)
+    adapter = get_adapter(settings, session)
     try:
         return get_collection_runner().run(
             session,

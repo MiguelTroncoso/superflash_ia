@@ -33,6 +33,17 @@ class TopChannel(BaseModel):
     collected_at: datetime
 
 
+class OverviewHistoryPoint(BaseModel):
+    """Agregado histórico de una ventana común de recolección."""
+
+    collected_at: datetime
+    avg_cpu_percent: float | None
+    avg_memory_percent: float | None
+    avg_disk_percent: float | None
+    total_input_mbps: float
+    total_output_mbps: float
+
+
 class OverviewRead(BaseModel):
     """Resumen agregado del estado actual de la infraestructura.
 
@@ -47,6 +58,9 @@ class OverviewRead(BaseModel):
     total_input_mbps: float
     avg_cpu_percent: float | None
     avg_memory_percent: float | None
+    avg_disk_percent: float | None
+    channel_count: int
     top_output_server: TopOutputServer | None
     server_network_utilization: list[ServerUtilization]
     top_channels: list[TopChannel]
+    history: list[OverviewHistoryPoint]

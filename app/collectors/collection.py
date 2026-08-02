@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.base import MonitoringSourceAdapter
 from app.models.channel import ChannelMetric
-from app.models.server import ServerMetric
+from app.models.server import ServerMetric, ServerOperationalStatus
 from app.repositories.channel_repository import ChannelRepository
 from app.repositories.server_repository import ServerRepository
 from app.schemas.collection import CollectionResult
@@ -140,14 +140,26 @@ class CollectionService:
                             cpu_percent=metric.cpu_percent,
                             memory_percent=metric.memory_percent,
                             disk_percent=metric.disk_percent,
+                            filesystem_percent=metric.filesystem_percent,
+                            swap_percent=metric.swap_percent,
                             input_mbps=metric.input_mbps,
                             output_mbps=metric.output_mbps,
+                            io_read_mbps=metric.io_read_mbps,
+                            io_write_mbps=metric.io_write_mbps,
+                            load_average_1m=metric.load_average_1m,
+                            load_average_5m=metric.load_average_5m,
+                            load_average_15m=metric.load_average_15m,
                             active_connections=metric.active_connections,
                             active_streams=metric.active_streams,
                             uptime_seconds=metric.uptime_seconds,
                             source=self._adapter.source_name,
                         )
                     )
+                    server = self._servers.get(server_id)
+                    if server is not None:
+                        server.last_heartbeat_at = metric.collected_at
+                        if server.status is not ServerOperationalStatus.MAINTENANCE:
+                            server.status = ServerOperationalStatus.ONLINE
                 result.server_metrics_inserted += 1
             except Exception as exc:  # aislamiento por elemento
                 self._record_error(

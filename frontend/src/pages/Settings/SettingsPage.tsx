@@ -20,7 +20,7 @@ const settingGroups = [
     title: 'Data sources',
     description: 'Future adapter configuration boundary.',
     icon: Boxes,
-    items: ['Mock source', 'Prometheus adapter', 'Streaming adapter'],
+    items: ['Prometheus adapter', 'Channel inventory', 'Collection status'],
   },
 ]
 
@@ -32,7 +32,7 @@ export function SettingsPage(): React.JSX.Element {
       <PageHeader
         eyebrow="Workspace configuration"
         title="Settings"
-        description="Visual placeholders for future frontend preferences. No settings are persisted or sent to the backend in this phase."
+        description="Frontend preference boundaries. No settings are persisted or sent to the backend in this phase."
       />
       <div className="grid gap-5 lg:grid-cols-3">
         {settingGroups.map(({ title, description, icon: Icon, items }) => (
@@ -65,8 +65,7 @@ export function SettingsPage(): React.JSX.Element {
         <div>
           <p className="text-sm font-semibold text-copy">Frontend foundation ready</p>
           <p className="mt-1 text-xs leading-5 text-muted">
-            API services, TanStack Query and state boundaries are prepared without making network
-            requests.
+            API services, TanStack Query and state boundaries are connected in read-only mode.
           </p>
         </div>
       </Surface>
