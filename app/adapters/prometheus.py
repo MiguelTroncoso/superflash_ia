@@ -21,6 +21,7 @@ Seguridad:
 
 import logging
 import math
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -107,6 +108,7 @@ class HostProbe:
     up_value: float | None
     metrics: dict[str, float | None] = field(default_factory=dict)
     error: str | None = None
+    latency_ms: float | None = None
 
 
 def _clamp_percent(value: float) -> float:
@@ -247,6 +249,7 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
             load_average_15m=_optional("load_average_15m"),
             uptime_seconds=int(uptime) if uptime is not None and uptime >= 0 else None,
             status=ServerStatus.ONLINE if up_value is not None else ServerStatus.UNKNOWN,
+            source="prometheus",
         )
 
     def get_servers(self) -> list[ServerSnapshot]:
@@ -294,6 +297,7 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
         probes: list[HostProbe] = []
         with self._client() as client:
             for server in self._inventory.servers:
+                started = time.perf_counter()
                 queries = build_queries(server.node_exporter_instance)
                 probe = HostProbe(
                     external_id=server.external_id,
@@ -314,6 +318,7 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
                     # endpoint; el diagnóstico expone únicamente la clase.
                     probe.error = type(error).__name__
                 probes.append(probe)
+                probe.latency_ms = round((time.perf_counter() - started) * 1000, 2)
         return probes
 
 
@@ -322,6 +327,18 @@ def _node_exporter_instance(hostname: str) -> str:
     if ":" in hostname or hostname.startswith("["):
         return hostname
     return f"{hostname}:9100"
+
+
+def _server_snapshot(server: Server) -> ServerSnapshot:
+    """Convierte un registro administrado al contrato del adapter."""
+    return ServerSnapshot(
+        external_id=server.external_id,
+        name=server.name,
+        hostname=server.hostname,
+        role=server.role or ServerRole.OTHER,
+        network_capacity_mbps=server.network_capacity_mbps,
+        enabled=server.enabled,
+    )
 
 
 class DatabasePrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
@@ -340,29 +357,21 @@ class DatabasePrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
         verify_tls: bool = True,
         transport: httpx.BaseTransport | None = None,
         now_fn: Callable[[], datetime] | None = None,
+        fallback: InfrastructureMetricsAdapter | None = None,
     ) -> None:
         self._servers = tuple(server for server in servers if server.enabled)
         self._timeout_seconds = timeout_seconds
         self._verify_tls = verify_tls
         self._transport = transport
         self._now_fn = now_fn
+        self._fallback = fallback
 
     @property
     def source_name(self) -> str:
         return "prometheus"
 
     def get_servers(self) -> list[ServerSnapshot]:
-        return [
-            ServerSnapshot(
-                external_id=server.external_id,
-                name=server.name,
-                hostname=server.hostname,
-                role=server.role,
-                network_capacity_mbps=server.network_capacity_mbps,
-                enabled=server.enabled,
-            )
-            for server in self._servers
-        ]
+        return [_server_snapshot(server) for server in self._servers]
 
     def get_infrastructure_metrics(self) -> list[InfrastructureMetricSnapshot]:
         groups: dict[tuple[str, str | None], list[Server]] = {}
@@ -404,6 +413,51 @@ class DatabasePrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
                 failures.append(f"{len(servers)} targets: {type(error).__name__}")
                 logger.warning("fallo en grupo Prometheus de %d targets", len(servers))
 
+        if self._fallback is not None:
+            configured_ids = {
+                server.external_id
+                for server in self._servers
+                if server.prometheus_url and server.hostname
+            }
+            snapshots.extend(
+                metric
+                for metric in self._fallback.get_infrastructure_metrics()
+                if metric.server_external_id not in configured_ids
+            )
+
         if groups and not snapshots and failures:
             raise PrometheusSourceError("ningún target administrado respondió")
         return snapshots
+
+    def probe_server(self, server: Server) -> HostProbe:
+        """Prueba un target administrado sin escribir en la base de datos."""
+        if not server.prometheus_url or not server.hostname:
+            return HostProbe(
+                external_id=server.external_id,
+                instance=_node_exporter_instance(server.hostname or "unknown"),
+                reachable=False,
+                up_value=None,
+                error="configuracion_incompleta",
+            )
+        inventory = Inventory(
+            servers=[
+                InventoryServer(
+                    external_id=server.external_id,
+                    name=server.name,
+                    hostname=server.hostname,
+                    role=server.role or ServerRole.OTHER,
+                    network_capacity_mbps=server.network_capacity_mbps,
+                    node_exporter_instance=_node_exporter_instance(server.hostname),
+                )
+            ]
+        )
+        adapter = PrometheusInfrastructureAdapter(
+            base_url=server.prometheus_url,
+            inventory=inventory,
+            timeout_seconds=self._timeout_seconds,
+            bearer_token=server.prometheus_token,
+            verify_tls=self._verify_tls,
+            transport=self._transport,
+            now_fn=self._now_fn,
+        )
+        return adapter.probe()[0]

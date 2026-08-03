@@ -9,7 +9,7 @@ del código ni del repositorio. Ver docs/real-source-integration.md.
 
 from sqlalchemy.orm import Session
 
-from app.adapters.base import MonitoringSourceAdapter
+from app.adapters.base import MonitoringSourceAdapter, ServerSnapshot
 from app.adapters.composite import CompositeMonitoringAdapter
 from app.adapters.inventory import load_inventory
 from app.adapters.mock import MockMonitoringAdapter
@@ -35,10 +35,29 @@ def get_infrastructure_adapter(
         if session is not None:
             from app.adapters.prometheus import DatabasePrometheusInfrastructureAdapter
 
+            servers = ServerRepository(session).list_enabled()
+            fallback_servers = [
+                ServerSnapshot(
+                    external_id=server.external_id,
+                    name=server.name,
+                    hostname=server.hostname,
+                    role=server.role,
+                    network_capacity_mbps=server.network_capacity_mbps,
+                    enabled=server.enabled,
+                )
+                for server in servers
+                if not (server.prometheus_url and server.hostname)
+            ]
             return DatabasePrometheusInfrastructureAdapter(
-                ServerRepository(session).list_enabled_with_prometheus(),
+                servers,
                 timeout_seconds=settings.prometheus_timeout_seconds,
                 verify_tls=settings.prometheus_tls_verify,
+                fallback=MockInfrastructureAdapter(
+                    seed=settings.mock_seed,
+                    server_snapshots=fallback_servers,
+                )
+                if fallback_servers
+                else None,
             )
         if not settings.prometheus_url:
             raise ValueError("INFRASTRUCTURE_SOURCE=prometheus requiere PROMETHEUS_URL configurada")

@@ -8,7 +8,7 @@ el comportamiento del mock original.
 """
 
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 
 from app.adapters.base import ChannelSnapshot, ServerSnapshot
@@ -29,9 +29,15 @@ _DEGRADED_CPU_THRESHOLD = 92.0
 class MockInfrastructureAdapter(InfrastructureMetricsAdapter):
     """Fuente simulada de métricas de máquina (CPU, RAM, disco, carga, red)."""
 
-    def __init__(self, seed: int = 42, now_fn: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self,
+        seed: int = 42,
+        now_fn: Callable[[], datetime] | None = None,
+        server_snapshots: Sequence[ServerSnapshot] | None = None,
+    ) -> None:
         self._seed = seed
         self._inner = MockMonitoringAdapter(seed=seed, now_fn=now_fn)
+        self._server_snapshots = tuple(server_snapshots or ())
 
     @property
     def source_name(self) -> str:
@@ -40,6 +46,8 @@ class MockInfrastructureAdapter(InfrastructureMetricsAdapter):
 
     def get_servers(self) -> list[ServerSnapshot]:
         """Inventario simulado de servidores (idéntico al mock combinado)."""
+        if self._server_snapshots:
+            return list(self._server_snapshots)
         return self._inner.get_servers()
 
     def get_infrastructure_metrics(self) -> list[InfrastructureMetricSnapshot]:
@@ -50,7 +58,21 @@ class MockInfrastructureAdapter(InfrastructureMetricsAdapter):
         muestra siga siendo reproducible.
         """
         snapshots: list[InfrastructureMetricSnapshot] = []
-        for metric in self._inner.get_server_metrics():
+        metrics = self._inner.get_server_metrics()
+        if self._server_snapshots:
+            # El fallback necesita poder representar servidores administrados
+            # que no pertenecen al catálogo fijo del mock histórico.
+            metrics = [
+                metric.model_copy(
+                    update={
+                        "server_external_id": server.external_id,
+                        "source": "mock",
+                    }
+                )
+                for index, server in enumerate(self._server_snapshots)
+                for metric in [metrics[index % len(metrics)]]
+            ]
+        for metric in metrics:
             rng = random.Random(
                 f"mock-infra:{self._seed}:{metric.collected_at.isoformat()}:"
                 f"{metric.server_external_id}"
@@ -78,6 +100,7 @@ class MockInfrastructureAdapter(InfrastructureMetricsAdapter):
                         if metric.cpu_percent > _DEGRADED_CPU_THRESHOLD
                         else ServerStatus.ONLINE
                     ),
+                    source="mock" if self._server_snapshots else "mock-infra",
                 )
             )
         return snapshots

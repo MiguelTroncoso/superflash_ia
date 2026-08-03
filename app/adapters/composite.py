@@ -127,6 +127,11 @@ class CompositeMonitoringAdapter(MonitoringSourceAdapter):
                 active_connections=viewers_by_server.get(metric.server_external_id, 0),
                 active_streams=streams_by_server.get(metric.server_external_id, 0),
                 uptime_seconds=metric.uptime_seconds,
+                source=(
+                    self.source_name
+                    if self._infrastructure.source_name == "mock-infra"
+                    else metric.source or self._infrastructure.source_name
+                ),
             )
             for metric in snapshot.infrastructure_metrics
         ]

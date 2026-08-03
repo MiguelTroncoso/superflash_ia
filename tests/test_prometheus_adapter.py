@@ -10,16 +10,20 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from app.adapters.base import ServerSnapshot
 from app.adapters.factory import get_infrastructure_adapter
 from app.adapters.inventory import Inventory, InventoryServer
+from app.adapters.mock_sources import MockInfrastructureAdapter
 from app.adapters.prometheus import (
+    DatabasePrometheusInfrastructureAdapter,
+    HostProbe,
     PrometheusAuthError,
     PrometheusInfrastructureAdapter,
     PrometheusSourceError,
 )
 from app.adapters.sources import ServerStatus
 from app.core.config import Settings
-from app.models import Server
+from app.models import Server, ServerRole
 from tests.conftest import FIXED_NOW, make_test_settings
 from tests.prom_helpers import full_values, instance_of, metric_key_of, prom_empty, prom_json
 
@@ -249,8 +253,6 @@ def test_no_token_in_logs_during_partial_failures(caplog):
 
 def test_database_targets_use_their_own_prometheus_configuration():
     """El provider administrado consulta targets y credenciales por servidor."""
-    from app.adapters.prometheus import DatabasePrometheusInfrastructureAdapter
-
     server = Server(
         external_id="srv-db",
         name="DB server",
@@ -277,6 +279,93 @@ def test_database_targets_use_their_own_prometheus_configuration():
     assert metrics[0].server_external_id == "srv-db"
     assert requests
     assert all("10.0.0.10:9100" in request.url.params["query"] for request in requests)
+
+
+@pytest.mark.parametrize("server_count", [1, 3, 5])
+def test_database_provider_uses_real_metrics_and_mock_only_per_unconfigured_server(server_count):
+    """La fuente real escala el primer flujo y conserva fallback por servidor."""
+    servers = []
+    real_ids: set[str] = set()
+    fallback_ids: set[str] = set()
+    for index in range(server_count):
+        external_id = f"srv-production-{index}"
+        configured = index % 2 == 0
+        server = Server(
+            external_id=external_id,
+            name=external_id,
+            hostname=f"10.0.0.{index + 1}",
+            role=ServerRole.OTHER,
+            network_capacity_mbps=1000,
+            prometheus_url="https://prometheus.internal" if configured else None,
+            enabled=True,
+        )
+        servers.append(server)
+        (real_ids if configured else fallback_ids).add(external_id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        key = metric_key_of(request.url.params["query"])
+        return httpx.Response(200, json=prom_json(full_values()[key]))
+
+    fallback = MockInfrastructureAdapter(
+        seed=42,
+        server_snapshots=[
+            ServerSnapshot(
+                external_id=server.external_id,
+                name=server.name,
+                hostname=server.hostname,
+                role=server.role,
+                network_capacity_mbps=server.network_capacity_mbps,
+            )
+            for server in servers
+            if server.external_id in fallback_ids
+        ],
+    )
+    adapter = DatabasePrometheusInfrastructureAdapter(
+        servers,
+        transport=httpx.MockTransport(handler),
+        fallback=fallback if fallback_ids else None,
+        now_fn=_fixed_clock,
+    )
+
+    metrics = adapter.get_infrastructure_metrics()
+
+    assert {metric.server_external_id for metric in metrics} == real_ids | fallback_ids
+    assert {
+        metric.server_external_id for metric in metrics if metric.source == "prometheus"
+    } == real_ids
+    assert {
+        metric.server_external_id for metric in metrics if metric.source == "mock"
+    } == fallback_ids
+    assert len(adapter.get_servers()) == server_count
+
+
+def test_probe_reports_latency_without_exposing_prometheus_configuration():
+    """El diagnóstico mide la consulta y conserva el secreto fuera del contrato."""
+    server = Server(
+        external_id="srv-probe",
+        name="Probe",
+        hostname="10.0.0.20",
+        role=ServerRole.OTHER,
+        prometheus_url="https://prometheus.internal",
+        prometheus_token=TOKEN,
+    )
+    adapter = DatabasePrometheusInfrastructureAdapter(
+        [server],
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json=prom_json(full_values()[metric_key_of(request.url.params["query"])])
+            )
+        ),
+        now_fn=_fixed_clock,
+    )
+
+    probe = adapter.probe_server(server)
+
+    assert isinstance(probe, HostProbe)
+    assert probe.reachable is True
+    assert probe.up_value == 1
+    assert probe.latency_ms is not None
+    assert TOKEN not in str(probe)
 
 
 # --- TLS y configuración -------------------------------------------------------

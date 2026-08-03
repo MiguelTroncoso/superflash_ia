@@ -159,6 +159,21 @@ class ServerRepository:
         )
         return list(self._session.scalars(stmt))
 
+    def list_enabled(self) -> list[Server]:
+        """Devuelve todo el inventario habilitado para fallback por servidor."""
+        stmt = select(Server).where(Server.enabled.is_(True)).order_by(Server.name)
+        return list(self._session.scalars(stmt))
+
+    def latest_metric(self, server_id: int) -> ServerMetric | None:
+        """Devuelve la muestra más reciente de un servidor."""
+        stmt = (
+            select(ServerMetric)
+            .where(ServerMetric.server_id == server_id)
+            .order_by(ServerMetric.collected_at.desc(), ServerMetric.id.desc())
+            .limit(1)
+        )
+        return self._session.scalars(stmt).first()
+
     def get(self, server_id: int) -> Server | None:
         """Busca un servidor por su id interno."""
         return self._session.get(Server, server_id)
