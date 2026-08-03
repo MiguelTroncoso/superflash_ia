@@ -1,0 +1,81 @@
+# Fixture documental para desarrollo y pruebas del motor de inteligencia.
+# No se carga automáticamente y no contiene URLs, tokens ni credenciales reales.
+version: 1
+policies:
+  due_soon_days: 30
+  capacity_state_warning_ratio: 0.8
+  max_servers: 12
+  max_channels: 5000
+servers:
+  - external_id: demo-main
+    name: MainServer
+    provider: Example Provider
+    datacenter: demo-santiago
+    group: core
+    country: CL
+    network_capacity_mbps: 1000
+    operational_network_limit_mbps: 700
+    recommended_network_limit_mbps: 800
+    minimum_network_reserve_mbps: 100
+    monthly_cost: 53
+    currency: USD
+  - external_id: demo-10gbs
+    name: 10GBS
+    provider: Example Provider
+    datacenter: demo-santiago
+    group: edge
+    country: CL
+    network_capacity_mbps: 10000
+    operational_network_limit_mbps: 7000
+    recommended_network_limit_mbps: 8000
+    minimum_network_reserve_mbps: 1000
+    monthly_cost: 185
+    currency: USD
+  - external_id: demo-live-1
+    name: Live 1
+    provider: Example Provider
+    datacenter: demo-santiago
+    group: live
+    country: CL
+    network_capacity_mbps: 1000
+    operational_network_limit_mbps: 700
+    recommended_network_limit_mbps: 800
+    minimum_network_reserve_mbps: 100
+    monthly_cost: 35
+    currency: USD
+  - external_id: demo-live-2
+    name: Live 2
+    provider: Example Provider
+    datacenter: demo-santiago
+    group: live
+    country: CL
+    network_capacity_mbps: 1000
+    operational_network_limit_mbps: 700
+    recommended_network_limit_mbps: 800
+    minimum_network_reserve_mbps: 100
+    monthly_cost: 35
+    currency: USD
+  - external_id: demo-live-3
+    name: Live 3
+    provider: Example Provider
+    datacenter: demo-santiago
+    group: live
+    country: CL
+    network_capacity_mbps: 1000
+    operational_network_limit_mbps: 700
+    recommended_network_limit_mbps: 800
+    minimum_network_reserve_mbps: 100
+    monthly_cost: 35
+    currency: USD
+  - external_id: demo-vod-1
+    name: VOD 1
+    provider: Example Provider
+    datacenter: demo-santiago
+    group: vod
+    country: CL
+    network_capacity_mbps: 1000
+    operational_network_limit_mbps: 700
+    recommended_network_limit_mbps: 800
+    minimum_network_reserve_mbps: 100
+    monthly_cost: 150
+    currency: USD
