@@ -56,6 +56,7 @@ def capacity_state(
 def _server_read(server: Server, metric: ServerMetric | None) -> CapacityServerRead:
     physical, operational, recommended, reserve = _limits(server)
     load = max(metric.output_mbps, 0.0) if metric is not None else None
+    has_configuration = physical is not None and operational is not None and recommended is not None
     physical_free = max(physical - load, 0.0) if physical is not None and load is not None else None
     operational_free = (
         max(operational - load, 0.0) if operational is not None and load is not None else None
@@ -79,7 +80,7 @@ def _server_read(server: Server, metric: ServerMetric | None) -> CapacityServerR
         ),
         state=capacity_state(metric, physical, operational, recommended, reserve),
         data_quality=CapacityDataQuality.OBSERVED
-        if metric is not None
+        if metric is not None and has_configuration
         else CapacityDataQuality.INSUFFICIENT_DATA,
         last_collected_at=metric.collected_at if metric is not None else None,
     )
