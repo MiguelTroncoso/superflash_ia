@@ -9,6 +9,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.adapters.base import ServerSnapshot
 from app.models.alert import Alert, AlertStatus
+from app.models.intelligence import ServerCostProfile
 from app.models.server import Server, ServerMetric
 
 
@@ -263,6 +264,39 @@ class ServerRepository:
             .order_by(Server.name)
         )
         return [(row[0], row[1]) for row in self._session.execute(stmt).all()]
+
+    def latest_enabled_with_cost(
+        self,
+    ) -> list[tuple[Server, ServerMetric | None, ServerCostProfile | None]]:
+        """Devuelve inventario habilitado, última métrica y coste en una consulta.
+
+        La unión externa conserva servidores sin datos o sin perfil financiero,
+        necesarios para mostrar ``no_data`` y ``insufficient_data`` sin hacer
+        consultas adicionales por servidor.
+        """
+        latest = (
+            select(
+                ServerMetric.server_id,
+                func.max(ServerMetric.collected_at).label("max_collected_at"),
+            )
+            .group_by(ServerMetric.server_id)
+            .subquery()
+        )
+        metric_join = and_(
+            ServerMetric.server_id == Server.id,
+            ServerMetric.server_id == latest.c.server_id,
+            ServerMetric.collected_at == latest.c.max_collected_at,
+        )
+        stmt = (
+            select(Server, ServerMetric, ServerCostProfile)
+            .select_from(Server)
+            .outerjoin(latest, latest.c.server_id == Server.id)
+            .outerjoin(ServerMetric, metric_join)
+            .outerjoin(ServerCostProfile, ServerCostProfile.server_id == Server.id)
+            .where(Server.enabled.is_(True))
+            .order_by(Server.name, Server.id)
+        )
+        return [(row[0], row[1], row[2]) for row in self._session.execute(stmt).all()]
 
     def count_enabled(self) -> int:
         """Número de servidores habilitados."""
