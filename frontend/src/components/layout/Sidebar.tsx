@@ -1,4 +1,4 @@
-import { Bell, Gauge, LayoutDashboard, Radio, Server, Settings2, Sparkles, X } from 'lucide-react'
+import { Bell, BrainCircuit, Gauge, LayoutDashboard, Radio, Server, Settings2, Sparkles, X } from 'lucide-react'
 import { NavLink } from 'react-router'
 import brandMark from '../../assets/brand-mark.svg'
 import { useUiStore } from '../../store/uiStore'
@@ -11,6 +11,7 @@ const navItems = [
   { label: 'Alerts', path: '/alerts', icon: Bell },
   { label: 'Balance', path: '/balance', icon: Gauge },
   { label: 'Recommendations', path: '/recommendations', icon: Sparkles },
+  { label: 'Optimizer', path: '/optimizer/capacity', icon: BrainCircuit },
   { label: 'Settings', path: '/settings', icon: Settings2 },
 ]
 

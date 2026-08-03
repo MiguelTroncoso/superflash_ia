@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router'
 import { MonitorLayout } from '../layouts/MonitorLayout'
+import { OptimizerLayout } from '../layouts/OptimizerLayout'
 
 const ChannelsPage = lazy(() =>
   import('../pages/Channels/ChannelsPage').then((module) => ({ default: module.ChannelsPage })),
@@ -26,6 +27,10 @@ const ServerDetailPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import('../pages/Settings/SettingsPage').then((module) => ({ default: module.SettingsPage })),
 )
+const CapacityPage = lazy(() => import('../pages/Optimizer/CapacityPage').then((module) => ({ default: module.CapacityPage })))
+const CostsPage = lazy(() => import('../pages/Optimizer/CostsPage').then((module) => ({ default: module.CostsPage })))
+const SimulatorPage = lazy(() => import('../pages/Optimizer/SimulatorPage').then((module) => ({ default: module.SimulatorPage })))
+const IntelligenceRecommendationsPage = lazy(() => import('../pages/Optimizer/RecommendationsPage').then((module) => ({ default: module.RecommendationsPage })))
 
 function PageFallback(): React.JSX.Element {
   return (
@@ -49,6 +54,13 @@ export function AppRoutes(): React.JSX.Element {
           <Route path="balance" element={<BalancePage />} />
           <Route path="recommendations" element={<RecommendationsPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="optimizer" element={<OptimizerLayout />}>
+            <Route index element={<Navigate to="capacity" replace />} />
+            <Route path="capacity" element={<CapacityPage />} />
+            <Route path="costs" element={<CostsPage />} />
+            <Route path="simulator" element={<SimulatorPage />} />
+            <Route path="recommendations" element={<IntelligenceRecommendationsPage />} />
+          </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>
