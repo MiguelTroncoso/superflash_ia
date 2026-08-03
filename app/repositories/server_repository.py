@@ -1,16 +1,20 @@
 """Acceso a datos de servidores y sus métricas."""
 
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import Select, and_, desc, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.adapters.base import ServerSnapshot
 from app.models.alert import Alert, AlertStatus
 from app.models.intelligence import ServerCostProfile
 from app.models.server import Server, ServerMetric
+
+if TYPE_CHECKING:
+    from app.adapters.base import ServerSnapshot
 
 
 class ServerRepository:
