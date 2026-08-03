@@ -15,12 +15,19 @@ from app.models.channel import (
     TechnicalStream,
 )
 from app.models.collection_run import CollectionRun, CollectionRunStatus, CollectionTrigger
+from app.models.intelligence import (
+    BillingFrequency,
+    PaymentStatus,
+    ServerCostProfile,
+    Simulation,
+)
 from app.models.server import Server, ServerMetric, ServerOperationalStatus, ServerRole
 
 __all__ = [
     "Alert",
     "AlertSeverity",
     "AlertStatus",
+    "BillingFrequency",
     "Channel",
     "ChannelCategoryHistory",
     "ChannelEvent",
@@ -30,9 +37,12 @@ __all__ = [
     "CollectionRun",
     "CollectionRunStatus",
     "CollectionTrigger",
+    "PaymentStatus",
     "Server",
+    "ServerCostProfile",
     "ServerMetric",
     "ServerOperationalStatus",
     "ServerRole",
+    "Simulation",
     "TechnicalStream",
 ]

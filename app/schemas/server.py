@@ -22,6 +22,10 @@ class ServerFields(BaseModel):
     type: str | None = Field(default=None, max_length=80)
     country: str | None = Field(default=None, min_length=2, max_length=2)
     network_speed_mbps: float | None = Field(default=None, ge=0)
+    operational_network_limit_mbps: float | None = Field(default=None, ge=0)
+    recommended_network_limit_mbps: float | None = Field(default=None, ge=0)
+    minimum_network_reserve_mbps: float | None = Field(default=None, ge=0)
+    candidate_for_replacement: bool = False
     prometheus_url: str | None = Field(default=None, max_length=500)
     prometheus_token: str | None = Field(default=None, max_length=1000)
     heartbeat_interval_seconds: int = Field(default=300, ge=30, le=86_400)
@@ -53,6 +57,10 @@ class ServerUpdate(BaseModel):
     type: str | None = Field(default=None, max_length=80)
     country: str | None = Field(default=None, min_length=2, max_length=2)
     network_speed_mbps: float | None = Field(default=None, ge=0)
+    operational_network_limit_mbps: float | None = Field(default=None, ge=0)
+    recommended_network_limit_mbps: float | None = Field(default=None, ge=0)
+    minimum_network_reserve_mbps: float | None = Field(default=None, ge=0)
+    candidate_for_replacement: bool | None = None
     prometheus_url: str | None = Field(default=None, max_length=500)
     prometheus_token: str | None = Field(default=None, max_length=1000)
     heartbeat_interval_seconds: int | None = Field(default=None, ge=30, le=86_400)
@@ -84,6 +92,10 @@ class ServerRead(BaseModel):
     country: str | None
     network_capacity_mbps: float | None
     network_speed_mbps: float | None
+    operational_network_limit_mbps: float | None
+    recommended_network_limit_mbps: float | None
+    minimum_network_reserve_mbps: float | None
+    candidate_for_replacement: bool
     prometheus_configured: bool
     heartbeat_interval_seconds: int
     last_heartbeat_at: datetime | None

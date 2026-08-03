@@ -1,7 +1,10 @@
 """Modelos ORM de servidores y sus métricas históricas."""
 
+from __future__ import annotations
+
 import enum
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     JSON,
@@ -20,6 +23,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
+
+if TYPE_CHECKING:
+    from app.models.intelligence import ServerCostProfile
 
 # En SQLite (tests) un BIGINT no autoincrementa como clave primaria;
 # esta variante mantiene BIGINT en PostgreSQL e INTEGER en SQLite.
@@ -69,6 +75,10 @@ class Server(Base):
     server_type: Mapped[str | None] = mapped_column("type", String(80), index=True)
     country: Mapped[str | None] = mapped_column(String(2), index=True)
     network_capacity_mbps: Mapped[float | None] = mapped_column(Float)
+    operational_network_limit_mbps: Mapped[float | None] = mapped_column(Float)
+    recommended_network_limit_mbps: Mapped[float | None] = mapped_column(Float)
+    minimum_network_reserve_mbps: Mapped[float | None] = mapped_column(Float)
+    candidate_for_replacement: Mapped[bool] = mapped_column(Boolean, default=False)
     prometheus_url: Mapped[str | None] = mapped_column(String(500))
     prometheus_token: Mapped[str | None] = mapped_column(String(1000))
     heartbeat_interval_seconds: Mapped[int] = mapped_column(Integer, default=300)
@@ -90,8 +100,11 @@ class Server(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    metrics: Mapped[list["ServerMetric"]] = relationship(
+    metrics: Mapped[list[ServerMetric]] = relationship(
         back_populates="server", cascade="all, delete-orphan", passive_deletes=True
+    )
+    cost_profile: Mapped[ServerCostProfile | None] = relationship(
+        back_populates="server", uselist=False, cascade="all, delete-orphan", passive_deletes=True
     )
 
     @property
