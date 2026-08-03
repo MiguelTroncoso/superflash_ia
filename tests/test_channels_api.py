@@ -2,7 +2,16 @@
 
 from datetime import UTC, datetime
 
-from app.models import Channel, ChannelMetric, ChannelStatus, Server, ServerRole
+from app.models import (
+    Channel,
+    ChannelEvent,
+    ChannelMetric,
+    ChannelStatus,
+    ChannelType,
+    Server,
+    ServerRole,
+    TechnicalStream,
+)
 
 
 def _seed_channels(session) -> tuple[Server, Channel, Channel]:
@@ -90,3 +99,50 @@ def test_channel_metrics_history(client, session):
 def test_channel_metrics_not_found(client):
     """Un canal inexistente devuelve 404."""
     assert client.get("/api/v1/channels/999/metrics").status_code == 404
+
+
+def test_dynamic_channel_fields_and_filters_are_exposed(client, session):
+    """La lista devuelve ciclo de vida, evento, stream y filtros de fuente."""
+    event = ChannelEvent(
+        source_id="xtream:provider-a",
+        external_id="event-1",
+        name="Final deportiva",
+    )
+    stream = TechnicalStream(
+        source_id="xtream:provider-a",
+        external_id="stream-1",
+        name="Feed principal",
+    )
+    channel = Channel(
+        source_id="xtream:provider-a",
+        external_id="channel-1",
+        name="Final temporal",
+        category="sports",
+        category_id="sports-1",
+        channel_type=ChannelType.EVENT,
+        active=False,
+        enabled=False,
+        event=event,
+        technical_stream=stream,
+    )
+    session.add(channel)
+    session.commit()
+
+    response = client.get(
+        "/api/v1/channels",
+        params={
+            "source_id": "xtream:provider-a",
+            "channel_type": "event",
+            "active": "false",
+            "category_id": "sports-1",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["channel_type"] == "event"
+    assert item["active"] is False
+    assert item["event_name"] == "Final deportiva"
+    assert item["technical_stream_name"] == "Feed principal"

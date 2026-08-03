@@ -16,6 +16,8 @@ export type ApiCollectionStatus = 'running' | 'success' | 'error'
 
 export type ApiCollectionTrigger = 'manual' | 'scheduler'
 
+export type ApiChannelType = 'permanent' | 'event' | 'temporary' | 'scheduled' | 'archived'
+
 export interface HealthResponse {
   status: ApiHealthStatus
   database: 'ok' | 'error'
@@ -123,10 +125,24 @@ export interface ServerPageResponse {
 
 export interface ChannelResponse {
   id: number
+  source_id: string
   external_id: string
   name: string
   category: string | null
+  category_id: string | null
+  category_name: string | null
+  channel_type: ApiChannelType
+  event_start_at: string | null
+  event_end_at: string | null
+  first_seen_at: string
+  last_seen_at: string
+  active: boolean
+  inactive_since_at: string | null
+  archived_at: string | null
+  source_updated_at: string | null
   current_server_id: number | null
+  event_id: number | null
+  technical_stream_id: number | null
   enabled: boolean
   created_at: string
   updated_at: string
@@ -135,6 +151,8 @@ export interface ChannelResponse {
 export interface ChannelMetricResponse {
   id: number
   channel_id: number
+  event_id: number | null
+  technical_stream_id: number | null
   server_id: number | null
   collected_at: string
   viewers: number
@@ -145,6 +163,10 @@ export interface ChannelMetricResponse {
 
 export interface ChannelListItem extends ChannelResponse {
   current_server_name: string | null
+  event_external_id: string | null
+  event_name: string | null
+  technical_stream_external_id: string | null
+  technical_stream_name: string | null
   latest_metric: ChannelMetricResponse | null
   viewers: number | null
   bitrate_mbps: number | null
@@ -195,6 +217,13 @@ export interface CollectionStatusResponse {
   status: ApiCollectionStatus | null
   inserted: number
   skipped: number
+  channels_created?: number
+  channels_updated?: number
+  channels_reactivated?: number
+  channels_deactivated?: number
+  channels_archived?: number
+  channels_unchanged?: number
+  channels_failed?: number
   errors: string[]
   next_run_at: string | null
 }

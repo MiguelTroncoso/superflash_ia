@@ -35,7 +35,7 @@ export function useChannelsData(params: ChannelListParams = {}): ChannelsData {
   const rows = (page?.items ?? []).map((channel) => ({
     channel,
     metric: channel.latest_metric,
-    state: channelState(channel.enabled, channel.latest_metric),
+    state: channelState(channel.active, channel.latest_metric),
   }))
 
   return {
@@ -55,8 +55,8 @@ export function useChannelsData(params: ChannelListParams = {}): ChannelsData {
   }
 }
 
-function channelState(enabled: boolean, metric: ChannelMetricResponse | null): HealthState {
-  if (!enabled || metric?.status === 'offline') return 'critical'
+function channelState(active: boolean, metric: ChannelMetricResponse | null): HealthState {
+  if (!active || metric?.status === 'offline') return 'critical'
   if (metric?.status === 'degraded' || metric === null) return 'warning'
   return 'healthy'
 }

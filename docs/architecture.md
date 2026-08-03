@@ -14,7 +14,7 @@ movimientos de canales. Ver [¿Por qué solo lectura?](#por-qué-solo-lectura).
 ```mermaid
 flowchart LR
     A[MockMonitoringAdapter] -->|snapshots Pydantic| B[CollectionService]
-    B -->|upsert por external_id| C[(servers / channels)]
+    B -->|upsert por source_id + external_id| C[(servers / channels)]
     B -->|insert deduplicado| D[(server_metrics / channel_metrics)]
     R[CollectionRunner<br/>lock + estado] --> B
     E[POST /api/v1/collection/run<br/>X-API-Key] --> R
@@ -27,7 +27,9 @@ flowchart LR
    métricas de servidores y métricas de canales, como *snapshots*
    Pydantic ya validados.
 2. `CollectionService` sincroniza el inventario: crea o actualiza
-   servidores y canales usando `external_id` como clave natural.
+   servidores y canales usando `source_id + external_id` como identidad
+   compuesta. Las ausencias pasan por un ciclo inactive → archived y no
+   eliminan métricas históricas.
 3. Persiste una muestra de métricas con `collected_at` truncado al
    minuto. Si la muestra ya existe (`server/channel + collected_at`) se
    omite: repetir una recolección es idempotente.
@@ -35,6 +37,9 @@ flowchart LR
    registra en el log y en el resumen (`errors`), sin abortar el resto.
 5. El resumen (`CollectionResult`) informa cuántos elementos se
    sincronizaron, insertaron, omitieron y qué errores hubo.
+6. Para canales dinámicos se persisten eventos, streams técnicos y cambios
+   de categoría; la misma fila de canal puede reaparecer con otro nombre o
+   evento sin generar duplicados.
 
 ### Exclusión mutua y estado observable
 

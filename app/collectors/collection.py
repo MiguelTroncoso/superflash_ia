@@ -11,6 +11,7 @@ programador (p. ej. cron o un scheduler in-process) invoque
 """
 
 import logging
+from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -34,10 +35,18 @@ class CollectionService:
         session: Session,
         adapter: MonitoringSourceAdapter,
         on_heartbeat: Callable[[], None] | None = None,
+        event_inactive_grace_hours: int = 6,
+        event_archive_days: int = 7,
+        permanent_archive_days: int = 30,
+        now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         self._session = session
         self._adapter = adapter
         self._on_heartbeat = on_heartbeat
+        self._event_inactive_grace_hours = event_inactive_grace_hours
+        self._event_archive_days = event_archive_days
+        self._permanent_archive_days = permanent_archive_days
+        self._now_fn = now_fn or (lambda: datetime.now(UTC))
         self._servers = ServerRepository(session)
         self._channels = ChannelRepository(session)
 
@@ -53,7 +62,7 @@ class CollectionService:
         los fallos por elemento se aíslan con savepoints para no perder
         el resto de la muestra.
         """
-        result = CollectionResult(adapter=self._adapter.source_name, collected_at=datetime.now(UTC))
+        result = CollectionResult(adapter=self._adapter.source_name, collected_at=self._now_fn())
 
         # Un ciclo nuevo: los adaptadores que cachean su muestra la refrescan
         # aquí y la reutilizan en las cuatro lecturas de esta pasada.
@@ -101,8 +110,13 @@ class CollectionService:
         return server_ids
 
     def _sync_channels(self, result: CollectionResult, server_ids: dict[str, int]) -> None:
-        """Crea/actualiza canales resolviendo su servidor actual."""
-        for snapshot in self._adapter.get_channels():
+        """Sincroniza altas/cambios y reconcilia ausencias por fuente."""
+        snapshots = self._adapter.get_channels()
+        seen_by_source: dict[str, set[str]] = defaultdict(set)
+        seen_by_source.setdefault(self._adapter.source_name, set())
+        for snapshot in snapshots:
+            source_id = snapshot.source_id or self._adapter.source_name
+            seen_by_source[source_id].add(snapshot.external_id)
             try:
                 current_server_id = (
                     server_ids.get(snapshot.server_external_id)
@@ -110,10 +124,35 @@ class CollectionService:
                     else None
                 )
                 with self._session.begin_nested():
-                    self._channels.upsert_from_snapshot(snapshot, current_server_id)
+                    outcome = self._channels.upsert_from_snapshot(
+                        snapshot,
+                        current_server_id,
+                        source_id=source_id,
+                        seen_at=result.collected_at,
+                    )
                 result.channels_synced += 1
+                counter_name = f"channels_{outcome.action}"
+                setattr(result, counter_name, getattr(result, counter_name) + 1)
             except Exception as exc:  # aislamiento por elemento
+                result.channels_failed += 1
                 self._record_error(result, f"fallo sincronizando canal {snapshot.external_id}", exc)
+
+        for source_id, seen_external_ids in seen_by_source.items():
+            try:
+                with self._session.begin_nested():
+                    reconciliation = self._channels.reconcile_missing(
+                        source_id=source_id,
+                        seen_external_ids=seen_external_ids,
+                        observed_at=result.collected_at,
+                        event_inactive_grace_hours=self._event_inactive_grace_hours,
+                        event_archive_days=self._event_archive_days,
+                        permanent_archive_days=self._permanent_archive_days,
+                    )
+                result.channels_deactivated += reconciliation.deactivated
+                result.channels_archived += reconciliation.archived
+            except Exception as exc:
+                result.channels_failed += 1
+                self._record_error(result, f"fallo reconciliando fuente {source_id}", exc)
 
     def _store_server_metrics(self, result: CollectionResult, server_ids: dict[str, int]) -> None:
         """Guarda la muestra de métricas de servidores, evitando duplicados."""
@@ -167,9 +206,29 @@ class CollectionService:
                 )
 
     def _store_channel_metrics(self, result: CollectionResult, server_ids: dict[str, int]) -> None:
-        """Guarda la muestra de métricas de canales, evitando duplicados."""
-        for metric in self._adapter.get_channel_metrics():
-            channel = self._channels.get_by_external_id(metric.channel_external_id)
+        """Guarda métricas de canales con resolución batched de identidades."""
+        metrics = self._adapter.get_channel_metrics()
+        default_source = self._adapter.source_name
+        channel_identities = {
+            (metric.source_id or default_source, metric.channel_external_id) for metric in metrics
+        }
+        channels = self._channels.get_by_identities(channel_identities)
+        event_identities = {
+            (metric.source_id or default_source, metric.event_external_id)
+            for metric in metrics
+            if metric.event_external_id is not None
+        }
+        stream_identities = {
+            (metric.source_id or default_source, metric.technical_stream_external_id)
+            for metric in metrics
+            if metric.technical_stream_external_id is not None
+        }
+        events = self._channels.get_events_by_identities(event_identities)
+        streams = self._channels.get_streams_by_identities(stream_identities)
+
+        for metric in metrics:
+            source_id = metric.source_id or default_source
+            channel = channels.get((source_id, metric.channel_external_id))
             if channel is None:
                 result.errors.append(f"métrica de canal desconocido: {metric.channel_external_id}")
                 logger.warning(
@@ -184,10 +243,24 @@ class CollectionService:
                 server_id = (
                     server_ids.get(metric.server_external_id) if metric.server_external_id else None
                 )
+                event = (
+                    events.get((source_id, metric.event_external_id))
+                    if metric.event_external_id is not None
+                    else None
+                )
+                stream = (
+                    streams.get((source_id, metric.technical_stream_external_id))
+                    if metric.technical_stream_external_id is not None
+                    else None
+                )
                 with self._session.begin_nested():
                     self._channels.add_metric(
                         ChannelMetric(
                             channel_id=channel.id,
+                            event_id=event.id if event is not None else channel.event_id,
+                            technical_stream_id=(
+                                stream.id if stream is not None else channel.technical_stream_id
+                            ),
                             server_id=server_id,
                             collected_at=metric.collected_at,
                             viewers=metric.viewers,

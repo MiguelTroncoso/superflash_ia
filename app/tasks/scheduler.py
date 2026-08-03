@@ -38,12 +38,18 @@ class CollectionScheduler:
         adapter_factory: Callable[..., MonitoringSourceAdapter],
         runner: CollectionRunner,
         collection_timeout_seconds: float = 600.0,
+        event_inactive_grace_hours: int = 6,
+        event_archive_days: int = 7,
+        permanent_archive_days: int = 30,
     ) -> None:
         self._interval = interval_seconds
         self._session_factory = session_factory
         self._adapter_factory = adapter_factory
         self._runner = runner
         self._collection_timeout_seconds = collection_timeout_seconds
+        self._event_inactive_grace_hours = event_inactive_grace_hours
+        self._event_archive_days = event_archive_days
+        self._permanent_archive_days = permanent_archive_days
         self._task: asyncio.Task[None] | None = None
         self._next_run_at: datetime | None = None
 
@@ -99,6 +105,9 @@ class CollectionScheduler:
                 self._build_adapter(session),
                 triggered_by=CollectionTrigger.SCHEDULER,
                 timeout_seconds=self._collection_timeout_seconds,
+                event_inactive_grace_hours=self._event_inactive_grace_hours,
+                event_archive_days=self._event_archive_days,
+                permanent_archive_days=self._permanent_archive_days,
             )
         except CollectionAlreadyRunningError:
             logger.warning("scheduler: ciclo omitido, ya hay una recolección en curso")

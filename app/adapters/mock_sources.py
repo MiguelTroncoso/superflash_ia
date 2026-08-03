@@ -103,7 +103,10 @@ class MockStreamingAdapter(StreamingMetricsAdapter):
         return [
             StreamingChannelMetricSnapshot(
                 channel_external_id=metric.channel_external_id,
+                source_id=metric.source_id,
                 server_external_id=metric.server_external_id,
+                event_external_id=metric.event_external_id,
+                technical_stream_external_id=metric.technical_stream_external_id,
                 collected_at=metric.collected_at,
                 viewers=metric.viewers,
                 bitrate_mbps=metric.bitrate_mbps,

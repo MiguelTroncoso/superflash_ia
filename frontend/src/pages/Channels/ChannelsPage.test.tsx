@@ -14,11 +14,11 @@ describe('ChannelsPage', () => {
   it('renders live channel rows and does not invent missing samples', () => {
     channelsMock.mockReturnValue({
       rows: [{
-        channel: { id: 1, external_id: 'ch-1', name: 'News', category: 'News', current_server_id: 2, enabled: true, created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-01T10:00:00Z', current_server_name: 'Server 2', latest_metric: null, viewers: null, bitrate_mbps: null, estimated_output_mbps: null, status: null, last_updated_at: null },
-        metric: { id: 2, channel_id: 1, server_id: 2, collected_at: '2026-08-01T10:00:00Z', viewers: 1200, bitrate_mbps: 4.5, estimated_output_mbps: 5, status: 'online' },
+        channel: { id: 1, source_id: 'xtream:test', external_id: 'ch-1', name: 'News', category: 'News', category_id: 'news', category_name: 'News', channel_type: 'permanent', event_start_at: null, event_end_at: null, first_seen_at: '2026-08-01T10:00:00Z', last_seen_at: '2026-08-01T10:00:00Z', active: true, inactive_since_at: null, archived_at: null, source_updated_at: null, current_server_id: 2, event_id: null, technical_stream_id: null, enabled: true, created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-01T10:00:00Z', current_server_name: 'Server 2', event_external_id: null, event_name: null, technical_stream_external_id: null, technical_stream_name: null, latest_metric: null, viewers: null, bitrate_mbps: null, estimated_output_mbps: null, status: null, last_updated_at: null },
+        metric: { id: 2, channel_id: 1, event_id: null, technical_stream_id: null, server_id: 2, collected_at: '2026-08-01T10:00:00Z', viewers: 1200, bitrate_mbps: 4.5, estimated_output_mbps: 5, status: 'online' },
         state: 'healthy',
       }, {
-        channel: { id: 2, external_id: 'ch-2', name: 'Sports', category: null, current_server_id: null, enabled: true, created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-01T10:00:00Z', current_server_name: null, latest_metric: null, viewers: null, bitrate_mbps: null, estimated_output_mbps: null, status: null, last_updated_at: null },
+        channel: { id: 2, source_id: 'xtream:test', external_id: 'ch-2', name: 'Sports', category: null, category_id: null, category_name: null, channel_type: 'event', event_start_at: null, event_end_at: null, first_seen_at: '2026-08-01T10:00:00Z', last_seen_at: '2026-08-01T10:00:00Z', active: true, inactive_since_at: null, archived_at: null, source_updated_at: null, current_server_id: null, event_id: null, technical_stream_id: null, enabled: true, created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-01T10:00:00Z', current_server_name: null, event_external_id: 'event-1', event_name: 'Sports event', technical_stream_external_id: null, technical_stream_name: null, latest_metric: null, viewers: null, bitrate_mbps: null, estimated_output_mbps: null, status: null, last_updated_at: null },
         metric: null,
         state: 'warning',
       }],
@@ -30,6 +30,8 @@ describe('ChannelsPage', () => {
 
     expect(screen.getAllByText('News')).toHaveLength(2)
     expect(screen.getAllByText('1.2K')).toHaveLength(2)
+    expect(screen.getByText('Permanent')).toBeInTheDocument()
+    expect(screen.getByText('Event')).toBeInTheDocument()
     expect(screen.getAllByText('—').length).toBeGreaterThan(0)
   })
 

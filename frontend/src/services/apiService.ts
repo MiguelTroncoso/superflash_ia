@@ -4,6 +4,7 @@ import type {
   BalanceResponse,
   ChannelMetricResponse,
   ChannelPageResponse,
+  ApiChannelType,
   CollectionStatusResponse,
   HealthResponse,
   OverviewResponse,
@@ -37,6 +38,12 @@ export interface ChannelListParams extends QueryParams {
   sort_order?: 'asc' | 'desc'
   server_id?: number
   category?: string
+  category_id?: string
+  source_id?: string
+  channel_type?: ApiChannelType
+  active?: boolean
+  event_start_from?: string
+  event_start_to?: string
   enabled?: boolean
 }
 

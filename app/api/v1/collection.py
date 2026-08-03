@@ -44,6 +44,9 @@ def run_collection(
             adapter,
             triggered_by=CollectionTrigger.MANUAL,
             timeout_seconds=settings.collection_timeout_seconds,
+            event_inactive_grace_hours=settings.event_inactive_grace_hours,
+            event_archive_days=settings.event_archive_days,
+            permanent_archive_days=settings.permanent_archive_days,
         )
     except CollectionAlreadyRunningError:
         raise HTTPException(
@@ -68,6 +71,13 @@ def _status_from_run(
         status=run.status,
         inserted=run.server_metrics_inserted + run.channel_metrics_inserted,
         skipped=run.server_metrics_skipped + run.channel_metrics_skipped,
+        channels_created=run.channels_created,
+        channels_updated=run.channels_updated,
+        channels_reactivated=run.channels_reactivated,
+        channels_deactivated=run.channels_deactivated,
+        channels_archived=run.channels_archived,
+        channels_unchanged=run.channels_unchanged,
+        channels_failed=run.channels_failed,
         errors=list(run.errors),
         next_run_at=next_run_at,
     )

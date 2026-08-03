@@ -18,6 +18,13 @@ class CollectionResult(BaseModel):
     server_metrics_skipped: int = 0
     channel_metrics_inserted: int = 0
     channel_metrics_skipped: int = 0
+    channels_created: int = 0
+    channels_updated: int = 0
+    channels_reactivated: int = 0
+    channels_deactivated: int = 0
+    channels_archived: int = 0
+    channels_unchanged: int = 0
+    channels_failed: int = 0
     # Errores no fatales: un fallo puntual no aborta la recolección completa.
     errors: list[str] = Field(default_factory=list)
 
@@ -48,5 +55,12 @@ class CollectionStatusRead(BaseModel):
     status: CollectionRunStatus | None = None
     inserted: int = 0
     skipped: int = 0
+    channels_created: int = 0
+    channels_updated: int = 0
+    channels_reactivated: int = 0
+    channels_deactivated: int = 0
+    channels_archived: int = 0
+    channels_unchanged: int = 0
+    channels_failed: int = 0
     errors: list[str] = Field(default_factory=list)
     next_run_at: datetime | None = None

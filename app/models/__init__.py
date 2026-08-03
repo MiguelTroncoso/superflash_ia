@@ -5,7 +5,15 @@ tablas (necesario para Alembic y para ``create_all`` en tests).
 """
 
 from app.models.alert import Alert, AlertSeverity, AlertStatus
-from app.models.channel import Channel, ChannelMetric, ChannelStatus
+from app.models.channel import (
+    Channel,
+    ChannelCategoryHistory,
+    ChannelEvent,
+    ChannelMetric,
+    ChannelStatus,
+    ChannelType,
+    TechnicalStream,
+)
 from app.models.collection_run import CollectionRun, CollectionRunStatus, CollectionTrigger
 from app.models.server import Server, ServerMetric, ServerOperationalStatus, ServerRole
 
@@ -14,8 +22,11 @@ __all__ = [
     "AlertSeverity",
     "AlertStatus",
     "Channel",
+    "ChannelCategoryHistory",
+    "ChannelEvent",
     "ChannelMetric",
     "ChannelStatus",
+    "ChannelType",
     "CollectionRun",
     "CollectionRunStatus",
     "CollectionTrigger",
@@ -23,4 +34,5 @@ __all__ = [
     "ServerMetric",
     "ServerOperationalStatus",
     "ServerRole",
+    "TechnicalStream",
 ]

@@ -61,6 +61,9 @@ class CollectionRunner:
         adapter: MonitoringSourceAdapter,
         triggered_by: CollectionTrigger = CollectionTrigger.MANUAL,
         timeout_seconds: float = 600.0,
+        event_inactive_grace_hours: int = 6,
+        event_archive_days: int = 7,
+        permanent_archive_days: int = 30,
     ) -> CollectionResult:
         """Ejecuta una recolección si no hay otra en curso.
 
@@ -84,7 +87,15 @@ class CollectionRunner:
                 raise CollectionAlreadyRunningError(
                     "otra instancia está ejecutando una recolección"
                 )
-            return self._run_locked(session, adapter, triggered_by, timeout_seconds)
+            return self._run_locked(
+                session,
+                adapter,
+                triggered_by,
+                timeout_seconds,
+                event_inactive_grace_hours,
+                event_archive_days,
+                permanent_archive_days,
+            )
         finally:
             distributed_lock.release()
             self._thread_lock.release()
@@ -95,6 +106,9 @@ class CollectionRunner:
         adapter: MonitoringSourceAdapter,
         triggered_by: CollectionTrigger,
         timeout_seconds: float,
+        event_inactive_grace_hours: int,
+        event_archive_days: int,
+        permanent_archive_days: int,
     ) -> CollectionResult:
         """Ejecuta la recolección con los locks ya tomados."""
         started_at = datetime.now(UTC)
@@ -119,7 +133,14 @@ class CollectionRunner:
             session.commit()
 
         try:
-            result = CollectionService(session, adapter, on_heartbeat=_persist_heartbeat).run()
+            result = CollectionService(
+                session,
+                adapter,
+                on_heartbeat=_persist_heartbeat,
+                event_inactive_grace_hours=event_inactive_grace_hours,
+                event_archive_days=event_archive_days,
+                permanent_archive_days=permanent_archive_days,
+            ).run()
             runs.finish_success(run_row, result, finished_at=datetime.now(UTC))
             session.commit()
             return result

@@ -11,7 +11,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.models.channel import ChannelStatus
+from app.models.channel import ChannelStatus, ChannelType
 from app.models.server import ServerRole
 
 
@@ -50,12 +50,27 @@ class ServerMetricSnapshot(BaseModel):
 
 
 class ChannelSnapshot(BaseModel):
-    """Datos de inventario de un canal según la fuente externa."""
+    """Datos de inventario de un canal según la fuente externa.
+
+    ``source_id`` permite que dos fuentes usen el mismo ``external_id`` sin
+    colisionar. Los campos de evento y stream son opcionales para conservar
+    compatibilidad con adapters que solo conocen canales permanentes.
+    """
 
     external_id: str
     name: str
+    source_id: str | None = Field(default=None, min_length=1, max_length=120)
     category: str | None = None
+    category_id: str | None = Field(default=None, max_length=100)
     server_external_id: str | None = None
+    channel_type: ChannelType = ChannelType.PERMANENT
+    event_external_id: str | None = Field(default=None, max_length=200)
+    event_name: str | None = Field(default=None, max_length=200)
+    event_start_at: datetime | None = None
+    event_end_at: datetime | None = None
+    technical_stream_external_id: str | None = Field(default=None, max_length=200)
+    technical_stream_name: str | None = Field(default=None, max_length=200)
+    source_updated_at: datetime | None = None
     enabled: bool = True
 
 
@@ -63,7 +78,10 @@ class ChannelMetricSnapshot(BaseModel):
     """Muestra de métricas de un canal entregada por la fuente."""
 
     channel_external_id: str
+    source_id: str | None = Field(default=None, min_length=1, max_length=120)
     server_external_id: str | None = None
+    event_external_id: str | None = Field(default=None, max_length=200)
+    technical_stream_external_id: str | None = Field(default=None, max_length=200)
     collected_at: datetime
     viewers: int = Field(ge=0)
     bitrate_mbps: float | None = Field(default=None, ge=0)
