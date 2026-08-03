@@ -1,6 +1,8 @@
 import { httpClient } from './httpClient'
 import type {
   AlertsResponse,
+  CapacityOverviewResponse,
+  CostsSummaryResponse,
   BalanceResponse,
   ChannelMetricResponse,
   ChannelPageResponse,
@@ -12,6 +14,10 @@ import type {
   ServerPageResponse,
   ServerResponse,
   RecommendationsResponse,
+  SimulationListResponse,
+  SimulationRequestInput,
+  SimulationResponse,
+  IntelligenceRecommendationsResponse,
 } from '../types/api'
 
 const API_V1_PREFIX = '/api/v1'
@@ -71,6 +77,20 @@ export const apiService = {
   getBalance: (): Promise<BalanceResponse> => getData(`${API_V1_PREFIX}/balance`),
   getRecommendations: (): Promise<RecommendationsResponse> =>
     getData(`${API_V1_PREFIX}/recommendations`),
+  getCapacityOverview: (): Promise<CapacityOverviewResponse> =>
+    getData(`${API_V1_PREFIX}/capacity/overview`),
+  getCapacityServers: (): Promise<CapacityOverviewResponse['servers']> =>
+    getData(`${API_V1_PREFIX}/capacity/servers`),
+  getCostsSummary: (): Promise<CostsSummaryResponse> =>
+    getData(`${API_V1_PREFIX}/costs/summary`),
+  getUpcomingCosts: (days = 30) =>
+    getData<CostsSummaryResponse['upcoming']>(`${API_V1_PREFIX}/costs/upcoming`, { days }),
+  getSimulations: (page = 1, pageSize = 50): Promise<SimulationListResponse> =>
+    getData(`${API_V1_PREFIX}/simulations`, { page, page_size: pageSize }),
+  createSimulation: (payload: SimulationRequestInput): Promise<SimulationResponse> =>
+    httpClient.post<SimulationResponse>(`${API_V1_PREFIX}/simulations`, payload).then((response) => response.data),
+  getIntelligenceRecommendations: (): Promise<IntelligenceRecommendationsResponse> =>
+    getData(`${API_V1_PREFIX}/intelligence/recommendations`),
   updateAlert: (alertId: number, status: 'active' | 'acknowledged' | 'resolved') =>
     httpClient.patch(`${API_V1_PREFIX}/alerts/${alertId}`, { status }),
 }
