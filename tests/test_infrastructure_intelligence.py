@@ -156,3 +156,11 @@ def test_intelligence_marks_missing_data_low_confidence(client, session) -> None
         item["code"] == "insufficient_data" and item["confidence"] < 0.5
         for item in body["recommendations"]
     )
+
+
+def test_empty_capacity_inventory_is_insufficient_data(client) -> None:
+    response = client.get("/api/v1/capacity/overview")
+
+    assert response.status_code == 200
+    assert response.json()["server_count"] == 0
+    assert response.json()["data_quality"] == "insufficient_data"
