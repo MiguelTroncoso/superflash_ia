@@ -1,9 +1,10 @@
 # Integración de fuentes reales de monitoreo
 
 Estado: la fuente de **infraestructura Prometheus ya está implementada**
-(`PrometheusInfrastructureAdapter`); la de **streaming** sigue en diseño
-(solo mock). El adaptador Prometheus no está conectado a ningún servidor
-real: se activa por configuración y aquí se documenta cómo hacerlo.
+(`PrometheusInfrastructureAdapter`) y la de **streaming** sigue en diseño
+(solo mock). El adapter compuesto puede consultar múltiples servidores
+registrados en PostgreSQL: cada servidor con hostname y URL Prometheus usa la
+fuente real; los demás conservan fallback MOCK por servidor.
 Este documento define cómo evaluar e integrar fuentes reales manteniendo
 la plataforma **estrictamente de solo lectura**.
 
@@ -54,11 +55,11 @@ las métricas estándar de node_exporter al contrato
 | Variable | Descripción |
 |---|---|
 | `INFRASTRUCTURE_SOURCE=prometheus` | Activa esta fuente |
-| `PROMETHEUS_URL` | URL base del servidor Prometheus (obligatoria) |
+| `PROMETHEUS_URL` | URL base del servidor Prometheus para el inventario YAML/CLI; la API usa la URL registrada por servidor |
 | `PROMETHEUS_TIMEOUT_SECONDS` | Timeout por consulta (default 10) |
 | `PROMETHEUS_BEARER_TOKEN` | Token opcional (`Authorization: Bearer`), nunca se loguea |
 | `PROMETHEUS_TLS_VERIFY` | Verificación TLS (default true; **obligatoria** en producción) |
-| `INFRASTRUCTURE_INVENTORY_FILE` | Ruta del inventario local YAML/JSON (obligatoria) |
+| `INFRASTRUCTURE_INVENTORY_FILE` | Ruta del inventario local YAML/JSON para CLI (no necesaria para targets registrados en PostgreSQL) |
 
 **Inventario local** (`app/adapters/inventory.py`): archivo YAML o JSON
 **no versionado** que lista los servidores a monitorear y su etiqueta
