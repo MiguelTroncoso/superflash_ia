@@ -1,6 +1,7 @@
 """Esquemas de respuesta para servidores y sus métricas."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -145,3 +146,26 @@ class ServerPage(PageMetadata):
     """Página de inventario de servidores."""
 
     items: list[ServerListItem]
+
+
+DiagnosticStatus = Literal["ok", "error", "degraded", "not_configured", "no_data"]
+
+
+class ServerDiagnosticCheck(BaseModel):
+    """Resultado seguro de una comprobación de conectividad."""
+
+    status: DiagnosticStatus
+    message: str
+
+
+class ServerDiagnosticRead(BaseModel):
+    """Diagnóstico operativo sin URLs privadas, tokens ni stack traces."""
+
+    server_id: int
+    server_name: str
+    status: DiagnosticStatus
+    prometheus: ServerDiagnosticCheck
+    node_exporter: ServerDiagnosticCheck
+    last_sample_at: datetime | None = None
+    latency_ms: float | None = Field(default=None, ge=0)
+    errors: list[str] = Field(default_factory=list)

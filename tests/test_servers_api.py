@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime
 
+from app.adapters.prometheus import HostProbe
+from app.api.v1 import servers as servers_api
 from app.models import Server, ServerMetric, ServerRole
 
 
@@ -152,3 +154,68 @@ def test_server_inventory_rejects_duplicate_external_id(client):
     assert client.post("/api/v1/servers", json=payload).status_code == 201
     duplicate = client.post("/api/v1/servers", json=payload)
     assert duplicate.status_code == 409
+
+
+def test_server_diagnose_reports_prometheus_and_node_exporter(monkeypatch, client, session):
+    """El diagnóstico HTTP entrega estado, latencia y ningún secreto."""
+    server = Server(
+        external_id="srv-diagnose",
+        name="Diagnose",
+        hostname="node.example.internal",
+        role=ServerRole.LIVE,
+        prometheus_url="https://prometheus.internal",
+        prometheus_token="diagnostic-secret",
+    )
+    session.add(server)
+    session.flush()
+    session.add(
+        ServerMetric(
+            server_id=server.id,
+            collected_at=datetime(2026, 7, 23, 12, 0, tzinfo=UTC),
+            cpu_percent=10,
+            memory_percent=20,
+            input_mbps=1,
+            output_mbps=2,
+            active_connections=1,
+            active_streams=1,
+            source="prometheus",
+        )
+    )
+    session.commit()
+
+    monkeypatch.setattr(
+        servers_api.DatabasePrometheusInfrastructureAdapter,
+        "probe_server",
+        lambda self, target: HostProbe(
+            external_id=target.external_id,
+            instance="node.example.internal:9100",
+            reachable=True,
+            up_value=1,
+            latency_ms=12.5,
+        ),
+    )
+
+    response = client.get(f"/api/v1/servers/{server.id}/diagnose")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["prometheus"]["message"] == "Prometheus OK"
+    assert body["node_exporter"]["message"] == "Node Exporter OK"
+    assert body["latency_ms"] == 12.5
+    assert "diagnostic-secret" not in response.text
+
+
+def test_server_diagnose_explains_missing_configuration(client, session):
+    """Un servidor sin Prometheus no se presenta como conectado."""
+    server = Server(external_id="srv-no-source", name="No source", role=ServerRole.OTHER)
+    session.add(server)
+    session.commit()
+
+    response = client.get(f"/api/v1/servers/{server.id}/diagnose")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "not_configured"
+    assert body["prometheus"]["status"] == "not_configured"
+    assert body["node_exporter"]["status"] == "not_configured"
