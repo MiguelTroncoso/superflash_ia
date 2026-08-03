@@ -115,7 +115,7 @@ class CapacityService:
         operational_free = sum(row.operational_free_mbps or 0 for row in servers)
         quality = (
             CapacityDataQuality.OBSERVED
-            if not missing_data
+            if rows and not missing_data
             else CapacityDataQuality.INSUFFICIENT_DATA
         )
         return CapacityOverviewRead(
