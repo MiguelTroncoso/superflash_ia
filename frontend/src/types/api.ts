@@ -16,6 +16,8 @@ export type ApiCollectionStatus = 'running' | 'success' | 'error'
 
 export type ApiCollectionTrigger = 'manual' | 'scheduler'
 
+export type ApiDiagnosticStatus = 'ok' | 'error' | 'degraded' | 'not_configured' | 'no_data'
+
 export type ApiChannelType = 'permanent' | 'event' | 'temporary' | 'scheduled' | 'archived'
 
 export interface HealthResponse {
@@ -88,6 +90,38 @@ export interface ServerResponse {
   enabled: boolean
   created_at: string
   updated_at: string
+}
+
+export interface ServerWriteInput {
+  external_id: string
+  name: string
+  hostname?: string | null
+  role?: ApiServerRole
+  provider?: string | null
+  datacenter?: string | null
+  group?: string | null
+  country?: string | null
+  network_speed_mbps?: number | null
+  prometheus_url?: string | null
+  prometheus_token?: string | null
+  heartbeat_interval_seconds?: number
+  enabled?: boolean
+}
+
+export interface ServerDiagnosticCheckResponse {
+  status: ApiDiagnosticStatus
+  message: string
+}
+
+export interface ServerDiagnosticResponse {
+  server_id: number
+  server_name: string
+  status: ApiDiagnosticStatus
+  prometheus: ServerDiagnosticCheckResponse
+  node_exporter: ServerDiagnosticCheckResponse
+  last_sample_at: string | null
+  latency_ms: number | null
+  errors: string[]
 }
 
 export interface ServerMetricResponse {

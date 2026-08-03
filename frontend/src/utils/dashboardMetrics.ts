@@ -18,6 +18,7 @@ export interface DashboardServerRow {
   inputMbps: number | null
   outputMbps: number | null
   collectedAt: string | null
+  source: string | null
   state: HealthState
   stateLabel: string
 }
@@ -73,6 +74,7 @@ export function mapServerRows(
         inputMbps: metric?.input_mbps ?? null,
         outputMbps: metric?.output_mbps ?? null,
         collectedAt: metric?.collected_at ?? null,
+        source: metric?.source ?? null,
         ...state,
       }
     })

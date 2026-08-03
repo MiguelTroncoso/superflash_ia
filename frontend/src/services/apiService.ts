@@ -13,6 +13,8 @@ import type {
   ServerMetricResponse,
   ServerPageResponse,
   ServerResponse,
+  ServerDiagnosticResponse,
+  ServerWriteInput,
   RecommendationsResponse,
   SimulationListResponse,
   SimulationRequestInput,
@@ -66,6 +68,14 @@ export const apiService = {
     getData(`${API_V1_PREFIX}/servers/${serverId}`),
   getServerMetrics: (serverId: number, limit = 1): Promise<ServerMetricResponse[]> =>
     getData(`${API_V1_PREFIX}/servers/${serverId}/metrics`, { limit }),
+  diagnoseServer: (serverId: number): Promise<ServerDiagnosticResponse> =>
+    getData(`${API_V1_PREFIX}/servers/${serverId}/diagnose`),
+  createServer: (payload: ServerWriteInput): Promise<ServerResponse> =>
+    httpClient.post<ServerResponse>(`${API_V1_PREFIX}/servers`, payload).then((response) => response.data),
+  updateServer: (serverId: number, payload: Partial<ServerWriteInput>): Promise<ServerResponse> =>
+    httpClient.patch<ServerResponse>(`${API_V1_PREFIX}/servers/${serverId}`, payload).then((response) => response.data),
+  deleteServer: (serverId: number): Promise<void> =>
+    httpClient.delete(`${API_V1_PREFIX}/servers/${serverId}`).then(() => undefined),
   getChannels: (params?: ChannelListParams): Promise<ChannelPageResponse> =>
     getData(`${API_V1_PREFIX}/channels`, params),
   getChannelMetrics: (channelId: number, limit = 1): Promise<ChannelMetricResponse[]> =>

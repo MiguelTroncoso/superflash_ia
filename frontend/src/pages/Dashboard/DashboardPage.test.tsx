@@ -53,6 +53,7 @@ function dashboardState(overrides: Partial<DashboardData> = {}): DashboardData {
         inputMbps: 22,
         outputMbps: 140,
         collectedAt: '2026-08-01T10:00:00Z',
+        source: 'mock',
         state: 'warning',
         stateLabel: 'Attention',
       },
