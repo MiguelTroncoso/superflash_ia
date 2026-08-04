@@ -151,9 +151,10 @@ sudo userdel node_exporter 2>/dev/null || true
 
 ## Diagnóstico y límites
 
-`GET /api/v1/servers/{id}/diagnose` es protegido por `X-API-Key`, no persiste
-nada y devuelve mensajes sanitizados. No devuelve stack traces, tokens ni
-URLs privadas. `/health` continúa siendo público.
+`GET /api/v1/servers/{id}/diagnose` es protegido por `X-API-Key`, realiza solo
+consultas externas de lectura y persiste de forma idempotente el snapshot
+técnico descubierto. Devuelve mensajes sanitizados: no devuelve stack traces,
+tokens ni URLs privadas. `/health` continúa siendo público.
 
 Antes de considerar la conexión productiva aprobada, valida firewall,
 `up==1`, una muestra Prometheus reciente, valores de CPU/RAM/red coherentes y
