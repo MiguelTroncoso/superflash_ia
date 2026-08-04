@@ -368,6 +368,149 @@ def test_probe_reports_latency_without_exposing_prometheus_configuration():
     assert TOKEN not in str(probe)
 
 
+def test_probe_can_discover_inventory_and_respects_manual_interface():
+    """El diagnóstico descubre inventario sin alterar la recolección normal."""
+    requests: list[str] = []
+
+    def vector_json(rows):
+        return {
+            "status": "success",
+            "data": {
+                "resultType": "vector",
+                "result": [
+                    {"metric": labels, "value": [1753300000.0, str(value)]}
+                    for labels, value in rows
+                ],
+            },
+        }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        query = request.url.params["query"]
+        requests.append(query)
+        if "node_exporter_build_info" in query:
+            return httpx.Response(200, json=vector_json([({"version": "1.8.2"}, 1)]))
+        if "node_uname_info" in query:
+            return httpx.Response(
+                200,
+                json=vector_json(
+                    [
+                        (
+                            {
+                                "nodename": "real-node",
+                                "machine": "x86_64",
+                                "sysname": "Linux",
+                                "release": "6.8.0",
+                                "version": "#1",
+                            },
+                            1,
+                        )
+                    ]
+                ),
+            )
+        if "node_cpu_info" in query:
+            return httpx.Response(
+                200,
+                json=vector_json(
+                    [
+                        ({"core": "0", "model_name": "Test CPU"}, 1),
+                        ({"core": "1", "model_name": "Test CPU"}, 1),
+                    ]
+                ),
+            )
+        if "node_filesystem_size_bytes" in query:
+            return httpx.Response(
+                200,
+                json=vector_json(
+                    [({"device": "/dev/sda1", "mountpoint": "/", "fstype": "ext4"}, 1_000_000)]
+                ),
+            )
+        if "node_network_info" in query:
+            return httpx.Response(
+                200, json=vector_json([({"device": "ens18", "operstate": "up"}, 1)])
+            )
+        if "node_network_speed_bytes" in query:
+            return httpx.Response(200, json=vector_json([({"device": "ens18"}, 125_000_000)]))
+        if "node_memory_MemTotal_bytes" in query:
+            return httpx.Response(200, json=prom_json(16_000_000_000))
+        if "node_memory_SwapTotal_bytes" in query:
+            return httpx.Response(200, json=prom_json(2_000_000_000))
+        if "node_boot_time_seconds" in query and "time() -" not in query:
+            return httpx.Response(200, json=prom_json(1753200000))
+        if "timestamp(up" in query:
+            return httpx.Response(200, json=prom_json(1753300000))
+        return httpx.Response(200, json=prom_json(full_values()[metric_key_of(query)]))
+
+    inventory = Inventory(
+        servers=[
+            InventoryServer(
+                external_id="srv-discovery",
+                name="Discovery",
+                hostname="10.0.0.30",
+                node_exporter_instance="10.0.0.30:9100",
+                network_interface="ens18",
+            )
+        ]
+    )
+    adapter = PrometheusInfrastructureAdapter(
+        base_url="https://prometheus.internal",
+        inventory=inventory,
+        transport=httpx.MockTransport(handler),
+        now_fn=_fixed_clock,
+    )
+
+    (probe,) = adapter.probe(include_inventory=True)
+
+    assert probe.reachable is True
+    assert probe.node_exporter_version == "1.8.2"
+    assert probe.last_scrape_at is not None
+    assert probe.inventory is not None
+    assert probe.inventory["hostname"] == "real-node"
+    assert probe.inventory["cpu"] == {"model": "Test CPU", "cores": 2, "threads": 2}
+    assert probe.inventory["interfaces"] == [
+        {"name": "ens18", "operstate": "up", "speed_mbps": 1000.0}
+    ]
+    assert any(
+        "node_network_receive_bytes_total" in query and 'device="ens18"' in query
+        for query in requests
+    )
+
+
+def test_probe_marks_missing_manual_interface():
+    """Una interfaz seleccionada sin RX/TX queda en diagnóstico degradado."""
+    inventory = Inventory(
+        servers=[
+            InventoryServer(
+                external_id="srv-missing-interface",
+                name="Missing interface",
+                hostname="10.0.0.31",
+                node_exporter_instance="10.0.0.31:9100",
+                network_interface="ens3",
+            )
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        query = request.url.params["query"]
+        if (
+            "node_network_receive_bytes_total" in query
+            or "node_network_transmit_bytes_total" in query
+        ):
+            return httpx.Response(200, json=prom_empty())
+        return httpx.Response(200, json=prom_json(full_values()[metric_key_of(query)]))
+
+    adapter = PrometheusInfrastructureAdapter(
+        base_url="https://prometheus.internal",
+        inventory=inventory,
+        transport=httpx.MockTransport(handler),
+    )
+
+    (probe,) = adapter.probe()
+
+    assert probe.reachable is True
+    assert probe.up_value == 1
+    assert probe.error == "interfaz_no_encontrada"
+
+
 # --- TLS y configuración -------------------------------------------------------
 
 

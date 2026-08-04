@@ -74,6 +74,7 @@ class Server(Base):
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     server_type: Mapped[str | None] = mapped_column("type", String(80), index=True)
     country: Mapped[str | None] = mapped_column(String(2), index=True)
+    network_interface: Mapped[str | None] = mapped_column(String(100))
     network_capacity_mbps: Mapped[float | None] = mapped_column(Float)
     operational_network_limit_mbps: Mapped[float | None] = mapped_column(Float)
     recommended_network_limit_mbps: Mapped[float | None] = mapped_column(Float)
@@ -101,6 +102,9 @@ class Server(Base):
     )
 
     metrics: Mapped[list[ServerMetric]] = relationship(
+        back_populates="server", cascade="all, delete-orphan", passive_deletes=True
+    )
+    inventory_snapshots: Mapped[list[ServerInventorySnapshot]] = relationship(
         back_populates="server", cascade="all, delete-orphan", passive_deletes=True
     )
     cost_profile: Mapped[ServerCostProfile | None] = relationship(
@@ -154,3 +158,31 @@ class ServerMetric(Base):
     source: Mapped[str] = mapped_column(String(50))
 
     server: Mapped[Server] = relationship(back_populates="metrics")
+
+
+class ServerInventorySnapshot(Base):
+    """Inventario técnico descubierto en una muestra real.
+
+    El payload JSON conserva campos que pueden variar entre versiones de
+    Node Exporter sin forzar una migración por cada etiqueta nueva. Cada
+    timestamp de scrape es único por servidor para permitir reintentos
+    idempotentes y mantener el histórico de cambios.
+    """
+
+    __tablename__ = "server_inventory_snapshots"
+    __table_args__ = (
+        UniqueConstraint("server_id", "captured_at", name="uq_server_inventory_server_captured"),
+        Index("ix_server_inventory_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"))
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(50), default="prometheus")
+    node_exporter_version: Mapped[str | None] = mapped_column(String(80))
+    prometheus_last_scrape_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    probe_latency_ms: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(30))
+    inventory: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+
+    server: Mapped[Server] = relationship(back_populates="inventory_snapshots")

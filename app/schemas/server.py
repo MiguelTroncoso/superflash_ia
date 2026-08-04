@@ -1,7 +1,7 @@
 """Esquemas de respuesta para servidores y sus métricas."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -22,6 +22,9 @@ class ServerFields(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=50)
     type: str | None = Field(default=None, max_length=80)
     country: str | None = Field(default=None, min_length=2, max_length=2)
+    network_interface: str | None = Field(
+        default=None, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$"
+    )
     network_speed_mbps: float | None = Field(default=None, ge=0)
     operational_network_limit_mbps: float | None = Field(default=None, ge=0)
     recommended_network_limit_mbps: float | None = Field(default=None, ge=0)
@@ -57,6 +60,9 @@ class ServerUpdate(BaseModel):
     tags: list[str] | None = Field(default=None, max_length=50)
     type: str | None = Field(default=None, max_length=80)
     country: str | None = Field(default=None, min_length=2, max_length=2)
+    network_interface: str | None = Field(
+        default=None, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$"
+    )
     network_speed_mbps: float | None = Field(default=None, ge=0)
     operational_network_limit_mbps: float | None = Field(default=None, ge=0)
     recommended_network_limit_mbps: float | None = Field(default=None, ge=0)
@@ -91,6 +97,7 @@ class ServerRead(BaseModel):
     tags: list[str]
     type: str | None
     country: str | None
+    network_interface: str | None
     network_capacity_mbps: float | None
     network_speed_mbps: float | None
     operational_network_limit_mbps: float | None
@@ -166,6 +173,26 @@ class ServerDiagnosticRead(BaseModel):
     status: DiagnosticStatus
     prometheus: ServerDiagnosticCheck
     node_exporter: ServerDiagnosticCheck
+    firewall: ServerDiagnosticCheck | None = None
     last_sample_at: datetime | None = None
+    last_scrape_at: datetime | None = None
+    node_exporter_version: str | None = None
     latency_ms: float | None = Field(default=None, ge=0)
+    inventory: dict[str, Any] | None = None
     errors: list[str] = Field(default_factory=list)
+
+
+class ServerInventorySnapshotRead(BaseModel):
+    """Snapshot técnico descubierto sin secretos ni configuración privada."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    server_id: int
+    captured_at: datetime
+    source: str
+    node_exporter_version: str | None
+    prometheus_last_scrape_at: datetime | None
+    probe_latency_ms: float | None
+    status: str
+    inventory: dict[str, Any]

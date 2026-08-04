@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -11,7 +12,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.alert import Alert, AlertStatus
 from app.models.intelligence import ServerCostProfile
-from app.models.server import Server, ServerMetric
+from app.models.server import Server, ServerInventorySnapshot, ServerMetric
 
 if TYPE_CHECKING:
     from app.adapters.base import ServerSnapshot
@@ -174,6 +175,32 @@ class ServerRepository:
         )
         return self._session.scalars(stmt).first()
 
+    def latest_inventory_snapshot(self, server_id: int) -> ServerInventorySnapshot | None:
+        """Devuelve el inventario técnico descubierto más reciente."""
+        stmt = (
+            select(ServerInventorySnapshot)
+            .where(ServerInventorySnapshot.server_id == server_id)
+            .order_by(
+                ServerInventorySnapshot.captured_at.desc(),
+                ServerInventorySnapshot.id.desc(),
+            )
+            .limit(1)
+        )
+        return self._session.scalars(stmt).first()
+
+    def inventory_snapshot_exists(self, server_id: int, captured_at: datetime) -> bool:
+        """Evita duplicar una captura si el diagnóstico se reintenta."""
+        stmt = select(ServerInventorySnapshot.id).where(
+            ServerInventorySnapshot.server_id == server_id,
+            ServerInventorySnapshot.captured_at == captured_at,
+        )
+        return self._session.scalars(stmt).first() is not None
+
+    def add_inventory_snapshot(self, snapshot: ServerInventorySnapshot) -> None:
+        """Añade un snapshot de inventario ya validado por el provider."""
+        self._session.add(snapshot)
+        self._session.flush()
+
     def get(self, server_id: int) -> Server | None:
         """Busca un servidor por su id interno."""
         return self._session.get(Server, server_id)
@@ -317,10 +344,48 @@ class ServerRepository:
         )
         return [(row[0], row[1], row[2]) for row in self._session.execute(stmt).all()]
 
-    def count_enabled(self) -> int:
-        """Número de servidores habilitados."""
-        stmt = select(func.count()).select_from(Server).where(Server.enabled.is_(True))
-        return self._session.scalars(stmt).one()
+    def output_statistics(
+        self, *, max_samples_per_server: int = 2_000
+    ) -> dict[int, dict[str, float | int | None]]:
+        """Calcula estadísticas en una ventana acotada por servidor.
+
+        La ventana se selecciona en SQL con ``row_number``. Con el límite
+        operacional de este sprint se mantiene acotada la memoria y se evita
+        un SELECT adicional por cada servidor.
+        """
+        ranked = (
+            select(
+                ServerMetric.server_id.label("server_id"),
+                ServerMetric.output_mbps.label("output_mbps"),
+                func.row_number()
+                .over(
+                    partition_by=ServerMetric.server_id,
+                    order_by=(ServerMetric.collected_at.desc(), ServerMetric.id.desc()),
+                )
+                .label("sample_number"),
+            )
+            .join(Server, ServerMetric.server_id == Server.id)
+            .where(Server.enabled.is_(True))
+            .subquery()
+        )
+        stmt = select(ranked.c.server_id, ranked.c.output_mbps).where(
+            ranked.c.sample_number <= max_samples_per_server
+        )
+        samples: dict[int, list[float]] = defaultdict(list)
+        for server_id, output_mbps in self._session.execute(stmt).all():
+            samples[int(server_id)].append(float(output_mbps))
+
+        result: dict[int, dict[str, float | int | None]] = {}
+        for server_id, values in samples.items():
+            values.sort()
+            result[server_id] = {
+                "sample_count": len(values),
+                "average_load_mbps": sum(values) / len(values),
+                "maximum_load_mbps": values[-1],
+                "p95_load_mbps": _percentile(values, 0.95),
+                "p99_load_mbps": _percentile(values, 0.99),
+            }
+        return result
 
     def recent_history(
         self, limit: int = 24
@@ -363,3 +428,19 @@ class ServerRepository:
             )
             for row in self._session.execute(stmt).all()
         ]
+
+    def count_enabled(self) -> int:
+        """Número de servidores habilitados."""
+        stmt = select(func.count()).select_from(Server).where(Server.enabled.is_(True))
+        return self._session.scalars(stmt).one()
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    """Percentil lineal determinista para una ventana ordenada."""
+    if len(values) == 1:
+        return values[0]
+    position = (len(values) - 1) * percentile
+    lower = int(position)
+    upper = min(lower + 1, len(values) - 1)
+    fraction = position - lower
+    return values[lower] + (values[upper] - values[lower]) * fraction

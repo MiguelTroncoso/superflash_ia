@@ -1,6 +1,6 @@
 """Endpoints de consulta de servidores y su histórico de métricas."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -11,12 +11,18 @@ from app.adapters.prometheus import DatabasePrometheusInfrastructureAdapter
 from app.api.deps import get_db, to_utc
 from app.api.pagination import NEXT_CURSOR_HEADER, decode_cursor, encode_cursor
 from app.core.config import Settings, get_settings
-from app.models.server import Server, ServerMetric, ServerOperationalStatus
+from app.models.server import (
+    Server,
+    ServerInventorySnapshot,
+    ServerMetric,
+    ServerOperationalStatus,
+)
 from app.repositories.server_repository import ServerRepository
 from app.schemas.server import (
     ServerCreate,
     ServerDiagnosticCheck,
     ServerDiagnosticRead,
+    ServerInventorySnapshotRead,
     ServerListItem,
     ServerMetricRead,
     ServerPage,
@@ -239,6 +245,7 @@ def diagnose_server(
 
     latest = repository.latest_metric(server.id)
     if not server.prometheus_url or not server.hostname:
+        latest_inventory = repository.latest_inventory_snapshot(server.id)
         return ServerDiagnosticRead(
             server_id=server.id,
             server_name=server.name,
@@ -251,7 +258,15 @@ def diagnose_server(
                 status="not_configured",
                 message="Node Exporter target is not configured",
             ),
+            firewall=ServerDiagnosticCheck(
+                status="not_configured",
+                message="Firewall path cannot be checked before a target is configured",
+            ),
             last_sample_at=latest.collected_at if latest is not None else None,
+            node_exporter_version=(
+                latest_inventory.node_exporter_version if latest_inventory is not None else None
+            ),
+            inventory=(latest_inventory.inventory if latest_inventory is not None else None),
             errors=["Configure hostname and Prometheus URL to test the real source"],
         )
 
@@ -259,7 +274,7 @@ def diagnose_server(
         [server],
         timeout_seconds=settings.prometheus_timeout_seconds,
         verify_tls=settings.prometheus_tls_verify,
-    ).probe_server(server)
+    ).probe_server(server, include_inventory=True)
     if not probe.reachable:
         error = _safe_probe_error(probe.error)
         return ServerDiagnosticRead(
@@ -270,15 +285,36 @@ def diagnose_server(
             node_exporter=ServerDiagnosticCheck(
                 status="error", message="Node Exporter could not be verified"
             ),
+            firewall=ServerDiagnosticCheck(
+                status="error",
+                message="The Prometheus-to-Node Exporter path could not be verified",
+            ),
             last_sample_at=latest.collected_at if latest is not None else None,
+            last_scrape_at=probe.last_scrape_at,
             latency_ms=probe.latency_ms,
             errors=[error],
         )
 
-    if probe.up_value == 1:
+    errors: list[str]
+    if probe.up_value == 1 and probe.error == "interfaz_no_encontrada":
+        exporter = ServerDiagnosticCheck(
+            status="degraded",
+            message="The configured network interface was not found",
+        )
+        overall = "degraded"
+        errors = ["Configured network interface returned no RX/TX sample"]
+        firewall = ServerDiagnosticCheck(
+            status="ok",
+            message="Node Exporter is reachable through the configured Prometheus path",
+        )
+    elif probe.up_value == 1:
         exporter = ServerDiagnosticCheck(status="ok", message="Node Exporter OK")
         overall = "ok"
-        errors: list[str] = []
+        errors = []
+        firewall = ServerDiagnosticCheck(
+            status="ok",
+            message="Node Exporter is reachable through the configured Prometheus path",
+        )
     elif probe.up_value == 0:
         exporter = ServerDiagnosticCheck(
             status="error",
@@ -286,12 +322,57 @@ def diagnose_server(
         )
         overall = "error"
         errors = ["Prometheus is reachable but Node Exporter reports up=0"]
+        firewall = ServerDiagnosticCheck(
+            status="error",
+            message="Node Exporter or its firewall allow-list blocked the scrape",
+        )
     else:
         exporter = ServerDiagnosticCheck(
             status="no_data", message="Node Exporter returned no up sample"
         )
         overall = "no_data"
         errors = ["Prometheus is reachable but no Node Exporter sample is available"]
+        firewall = ServerDiagnosticCheck(
+            status="degraded",
+            message="The target path is reachable but returned no Node Exporter sample",
+        )
+
+    if probe.inventory is not None and not probe.inventory.get("interfaces"):
+        errors.append("No network interface was discovered by Node Exporter")
+        if overall == "ok":
+            overall = "degraded"
+
+    captured_at = probe.last_scrape_at or (
+        latest.collected_at if latest is not None else datetime.now(UTC)
+    )
+    if probe.inventory is not None and not repository.inventory_snapshot_exists(
+        server.id, captured_at
+    ):
+        inventory = dict(probe.inventory)
+        inventory.update(
+            {
+                "provider": server.provider,
+                "datacenter": server.datacenter,
+                "group": server.group,
+                "country": server.country,
+                "server_type": server.server_type,
+                "network_interface": server.network_interface,
+                "network_capacity_mbps": server.network_capacity_mbps,
+            }
+        )
+        repository.add_inventory_snapshot(
+            ServerInventorySnapshot(
+                server_id=server.id,
+                captured_at=captured_at,
+                source="prometheus",
+                node_exporter_version=probe.node_exporter_version,
+                prometheus_last_scrape_at=probe.last_scrape_at,
+                probe_latency_ms=probe.latency_ms,
+                status=overall,
+                inventory=inventory,
+            )
+        )
+        session.commit()
 
     return ServerDiagnosticRead(
         server_id=server.id,
@@ -299,10 +380,34 @@ def diagnose_server(
         status=overall,
         prometheus=ServerDiagnosticCheck(status="ok", message="Prometheus OK"),
         node_exporter=exporter,
-        last_sample_at=latest.collected_at if latest is not None else None,
+        firewall=firewall,
+        last_sample_at=(
+            probe.last_scrape_at
+            if probe.last_scrape_at is not None
+            else (latest.collected_at if latest is not None else None)
+        ),
+        last_scrape_at=probe.last_scrape_at,
+        node_exporter_version=probe.node_exporter_version,
         latency_ms=probe.latency_ms,
+        inventory=probe.inventory,
         errors=errors,
     )
+
+
+@router.get(
+    "/{server_id}/inventory",
+    response_model=ServerInventorySnapshotRead | None,
+)
+def get_server_inventory(
+    server_id: int,
+    session: Annotated[Session, Depends(get_db)],
+) -> ServerInventorySnapshotRead | None:
+    """Devuelve el último inventario técnico descubierto, si existe."""
+    repository = ServerRepository(session)
+    if repository.get(server_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Servidor no encontrado")
+    snapshot = repository.latest_inventory_snapshot(server_id)
+    return ServerInventorySnapshotRead.model_validate(snapshot) if snapshot is not None else None
 
 
 def _safe_probe_error(error: str | None) -> str:

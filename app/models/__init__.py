@@ -21,7 +21,13 @@ from app.models.intelligence import (
     ServerCostProfile,
     Simulation,
 )
-from app.models.server import Server, ServerMetric, ServerOperationalStatus, ServerRole
+from app.models.server import (
+    Server,
+    ServerInventorySnapshot,
+    ServerMetric,
+    ServerOperationalStatus,
+    ServerRole,
+)
 
 __all__ = [
     "Alert",
@@ -40,6 +46,7 @@ __all__ = [
     "PaymentStatus",
     "Server",
     "ServerCostProfile",
+    "ServerInventorySnapshot",
     "ServerMetric",
     "ServerOperationalStatus",
     "ServerRole",
