@@ -152,10 +152,12 @@ function DiagnosticPanel({ diagnostic }: { diagnostic: NonNullable<ReturnType<ty
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         {check('Prometheus', diagnostic.prometheus.status, diagnostic.prometheus.message)}
         {check('Node Exporter', diagnostic.node_exporter.status, diagnostic.node_exporter.message)}
+        {diagnostic.firewall && check('Firewall path', diagnostic.firewall.status, diagnostic.firewall.message)}
       </div>
       <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted">
         <span>Latency: {diagnostic.latency_ms === null ? '—' : `${diagnostic.latency_ms.toFixed(1)} ms`}</span>
-        <span>Last sample: {formatDateTime(diagnostic.last_sample_at)}</span>
+        <span>Last scrape: {formatDateTime(diagnostic.last_scrape_at ?? diagnostic.last_sample_at)}</span>
+        <span>Node Exporter: {diagnostic.node_exporter_version ?? 'unknown version'}</span>
       </div>
       {diagnostic.errors.length > 0 && <p className="mt-3 text-xs text-warning">{diagnostic.errors.join(' · ')}</p>}
     </Surface>

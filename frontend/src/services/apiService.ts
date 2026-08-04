@@ -14,6 +14,7 @@ import type {
   ServerPageResponse,
   ServerResponse,
   ServerDiagnosticResponse,
+  ServerInventorySnapshotResponse,
   ServerWriteInput,
   RecommendationsResponse,
   SimulationListResponse,
@@ -70,6 +71,8 @@ export const apiService = {
     getData(`${API_V1_PREFIX}/servers/${serverId}/metrics`, { limit }),
   diagnoseServer: (serverId: number): Promise<ServerDiagnosticResponse> =>
     getData(`${API_V1_PREFIX}/servers/${serverId}/diagnose`),
+  getServerInventory: (serverId: number): Promise<ServerInventorySnapshotResponse | null> =>
+    getData(`${API_V1_PREFIX}/servers/${serverId}/inventory`),
   createServer: (payload: ServerWriteInput): Promise<ServerResponse> =>
     httpClient.post<ServerResponse>(`${API_V1_PREFIX}/servers`, payload).then((response) => response.data),
   updateServer: (serverId: number, payload: Partial<ServerWriteInput>): Promise<ServerResponse> =>

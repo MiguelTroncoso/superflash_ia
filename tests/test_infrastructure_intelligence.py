@@ -1,6 +1,6 @@
 """Pruebas del motor de capacidad, costes y simulaciones locales."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from app.models import (
     BillingFrequency,
@@ -102,6 +102,39 @@ def test_capacity_costs_and_payment_due_are_read_only(client, session) -> None:
     assert costs.json()["monthly_total"] == 53
     assert costs.json()["annual_projected"] == 636
     assert upcoming.json()[0]["payment_status"] == "due_soon"
+
+
+def test_capacity_exposes_bounded_historical_network_statistics(client, session) -> None:
+    """El Optimizer calcula p95/p99 con una ventana histórica determinista."""
+    server = _server(session, "intel-history", "History")
+    base = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
+    for index, output in enumerate((100.0, 200.0, 300.0, 400.0)):
+        session.add(
+            ServerMetric(
+                server_id=server.id,
+                collected_at=base + timedelta(minutes=index),
+                cpu_percent=20,
+                memory_percent=30,
+                input_mbps=output / 2,
+                output_mbps=output,
+                active_connections=1,
+                active_streams=1,
+                source="prometheus",
+            )
+        )
+    session.commit()
+
+    response = client.get("/api/v1/capacity/overview")
+
+    assert response.status_code == 200
+    stats = response.json()["servers"][0]
+    assert stats["sample_count"] == 4
+    assert stats["average_load_mbps"] == 250.0
+    assert stats["maximum_load_mbps"] == 400.0
+    assert stats["p95_load_mbps"] == 385.0
+    assert stats["p99_load_mbps"] == 397.0
+    assert stats["headroom_mbps"] == 415.0
+    assert stats["operational_margin_mbps"] == 315.0
 
 
 def test_simulation_replacement_is_persisted_locally_and_reports_savings(client, session) -> None:

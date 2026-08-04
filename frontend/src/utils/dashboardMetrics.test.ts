@@ -14,6 +14,7 @@ const server: ServerResponse = {
   tags: [],
   type: 'bare-metal',
   country: 'CL',
+  network_interface: null,
   network_capacity_mbps: 1000,
   network_speed_mbps: 1000,
   operational_network_limit_mbps: null,

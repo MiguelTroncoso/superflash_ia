@@ -21,6 +21,7 @@ interface ServerFormState {
   role: ApiServerRole
   provider: string
   network_speed_mbps: string
+  network_interface: string
   prometheus_url: string
   prometheus_token: string
   enabled: boolean
@@ -33,6 +34,7 @@ const emptyForm: ServerFormState = {
   role: 'other',
   provider: '',
   network_speed_mbps: '',
+  network_interface: '',
   prometheus_url: '',
   prometheus_token: '',
   enabled: true,
@@ -197,6 +199,7 @@ export function ServersPage(): React.JSX.Element {
       role: server.role,
       provider: server.provider ?? '',
       network_speed_mbps: server.network_speed_mbps?.toString() ?? '',
+      network_interface: server.network_interface ?? '',
       prometheus_url: '',
       prometheus_token: '',
       enabled: server.enabled,
@@ -225,13 +228,24 @@ export function ServersPage(): React.JSX.Element {
       role: form.role,
       provider: form.provider.trim() || null,
       network_speed_mbps: form.network_speed_mbps ? Number(form.network_speed_mbps) : null,
+      network_interface: form.network_interface.trim() || null,
       enabled: form.enabled,
     }
     if (form.prometheus_url.trim()) payload.prometheus_url = form.prometheus_url.trim()
     if (form.prometheus_token.trim()) payload.prometheus_token = form.prometheus_token.trim()
     try {
-      if (editingId === null) await apiService.createServer(payload)
-      else await apiService.updateServer(editingId, payload)
+      const saved = editingId === null
+        ? await apiService.createServer(payload)
+        : await apiService.updateServer(editingId, payload)
+      if (editingId === null && saved.prometheus_configured && payload.hostname) {
+        // El diagnóstico inicial solo consulta Prometheus y persiste el
+        // snapshot técnico; un fallo no revierte el alta del inventario.
+        try {
+          await apiService.diagnoseServer(saved.id)
+        } catch {
+          // Se puede reintentar desde el detalle del servidor.
+        }
+      }
       await data.refetch()
       closeForm()
     } catch {
@@ -270,7 +284,25 @@ export function ServersPage(): React.JSX.Element {
 }
 
 function ServerForm({ form, editing, saving, diagnosing, error, onChange, onCancel, onDiagnose, onSubmit }: { form: ServerFormState; editing: boolean; saving: boolean; diagnosing: boolean; error: string | null; onChange: (field: keyof ServerFormState, value: string | boolean) => void; onCancel: () => void; onDiagnose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void> }): React.JSX.Element {
-  return <Surface className="mb-5 p-5"><div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-semibold text-copy">{editing ? 'Edit server' : 'Connect server'}</h2><p className="mt-1 text-xs text-muted">Prometheus and Node Exporter are read-only. Tokens are never shown after saving.</p></div><button type="button" onClick={onCancel} className="rounded-lg p-2 text-muted hover:text-copy"><X size={16} /></button></div><form onSubmit={(event) => void onSubmit(event)} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><FormInput label="Name" value={form.name} required onChange={(value) => onChange('name', value)} /><FormInput label="External ID" value={form.external_id} required disabled={editing} onChange={(value) => onChange('external_id', value)} /><FormInput label="Hostname / IP" value={form.hostname} placeholder="server.example.com" onChange={(value) => onChange('hostname', value)} /><label className="text-xs text-muted">Role<select value={form.role} onChange={(event) => onChange('role', event.target.value as ApiServerRole)} className="mt-2 w-full rounded-xl border border-line bg-panel-raised px-3 py-2.5 text-xs text-copy outline-none focus:border-brand"><option value="main">main</option><option value="live">live</option><option value="vod">vod</option><option value="other">other</option></select></label><FormInput label="Provider" value={form.provider} onChange={(value) => onChange('provider', value)} /><FormInput label="Network Mbps" type="number" min="0" value={form.network_speed_mbps} onChange={(value) => onChange('network_speed_mbps', value)} /><FormInput label="Prometheus URL" value={form.prometheus_url} placeholder={editing ? 'Leave blank to keep current' : 'https://prometheus.internal'} onChange={(value) => onChange('prometheus_url', value)} /><FormInput label="Prometheus token" type="password" value={form.prometheus_token} placeholder={editing ? 'Leave blank to keep current' : 'Optional'} onChange={(value) => onChange('prometheus_token', value)} /><label className="flex items-center gap-2 text-xs text-muted sm:col-span-2"><input type="checkbox" checked={form.enabled} onChange={(event) => onChange('enabled', event.target.checked)} /> Enabled for collection</label>{error && <p className="text-xs text-danger sm:col-span-2">{error}</p>}<div className="flex justify-end gap-2 sm:col-span-2 lg:col-span-4"><button type="button" onClick={onCancel} className="rounded-xl border border-line px-4 py-2.5 text-xs font-semibold text-muted hover:text-copy">Cancel</button>{editing && <button type="button" disabled={diagnosing} onClick={onDiagnose} className="rounded-xl border border-line px-4 py-2.5 text-xs font-semibold text-muted hover:text-copy disabled:opacity-40">{diagnosing ? 'Testing…' : 'Test connection'}</button>}<button type="submit" disabled={saving || !form.name.trim() || !form.external_id.trim()} className="rounded-xl bg-brand px-4 py-2.5 text-xs font-semibold text-canvas hover:bg-sky-300 disabled:opacity-40">{saving ? 'Saving…' : editing ? 'Save changes' : 'Connect server'}</button></div></form></Surface>
+  return (
+    <Surface className="mb-5 p-5">
+      <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-semibold text-copy">{editing ? 'Edit server' : 'Connect server'}</h2><p className="mt-1 text-xs text-muted">Prometheus and Node Exporter are read-only. Tokens are never shown after saving.</p></div><button type="button" onClick={onCancel} className="rounded-lg p-2 text-muted hover:text-copy"><X size={16} /></button></div>
+      <form onSubmit={(event) => void onSubmit(event)} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <FormInput label="Name" value={form.name} required onChange={(value) => onChange('name', value)} />
+        <FormInput label="External ID" value={form.external_id} required disabled={editing} onChange={(value) => onChange('external_id', value)} />
+        <FormInput label="Hostname / IP" value={form.hostname} placeholder="server.example.com" onChange={(value) => onChange('hostname', value)} />
+        <label className="text-xs text-muted">Role<select value={form.role} onChange={(event) => onChange('role', event.target.value as ApiServerRole)} className="mt-2 w-full rounded-xl border border-line bg-panel-raised px-3 py-2.5 text-xs text-copy outline-none focus:border-brand"><option value="main">main</option><option value="live">live</option><option value="vod">vod</option><option value="other">other</option></select></label>
+        <FormInput label="Provider" value={form.provider} onChange={(value) => onChange('provider', value)} />
+        <FormInput label="Network Mbps" type="number" min="0" value={form.network_speed_mbps} onChange={(value) => onChange('network_speed_mbps', value)} />
+        <FormInput label="Network interface (optional)" value={form.network_interface} placeholder="eth0 / ens18 / enp1s0" onChange={(value) => onChange('network_interface', value)} />
+        <FormInput label="Prometheus URL" value={form.prometheus_url} placeholder={editing ? 'Leave blank to keep current' : 'https://prometheus.internal'} onChange={(value) => onChange('prometheus_url', value)} />
+        <FormInput label="Prometheus token" type="password" value={form.prometheus_token} placeholder={editing ? 'Leave blank to keep current' : 'Optional'} onChange={(value) => onChange('prometheus_token', value)} />
+        <label className="flex items-center gap-2 text-xs text-muted sm:col-span-2"><input type="checkbox" checked={form.enabled} onChange={(event) => onChange('enabled', event.target.checked)} /> Enabled for collection</label>
+        {error && <p className="text-xs text-danger sm:col-span-2">{error}</p>}
+        <div className="flex justify-end gap-2 sm:col-span-2 lg:col-span-4"><button type="button" onClick={onCancel} className="rounded-xl border border-line px-4 py-2.5 text-xs font-semibold text-muted hover:text-copy">Cancel</button>{editing && <button type="button" disabled={diagnosing} onClick={onDiagnose} className="rounded-xl border border-line px-4 py-2.5 text-xs font-semibold text-muted hover:text-copy disabled:opacity-40">{diagnosing ? 'Testing…' : 'Test connection'}</button>}<button type="submit" disabled={saving || !form.name.trim() || !form.external_id.trim()} className="rounded-xl bg-brand px-4 py-2.5 text-xs font-semibold text-canvas hover:bg-sky-300 disabled:opacity-40">{saving ? 'Saving…' : editing ? 'Save changes' : 'Connect server'}</button></div>
+      </form>
+    </Surface>
+  )
 }
 
 function FormInput({ label, value, onChange, placeholder, type = 'text', min, required = false, disabled = false }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string; min?: string; required?: boolean; disabled?: boolean }): React.JSX.Element {

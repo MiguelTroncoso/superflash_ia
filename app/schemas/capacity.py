@@ -44,6 +44,14 @@ class CapacityServerRead(BaseModel):
     state: CapacityState
     data_quality: CapacityDataQuality
     last_collected_at: datetime | None
+    sample_count: int = 0
+    average_load_mbps: float | None = None
+    maximum_load_mbps: float | None = None
+    p95_load_mbps: float | None = None
+    p99_load_mbps: float | None = None
+    headroom_mbps: float | None = None
+    operational_margin_mbps: float | None = None
+    free_capacity_mbps: float | None = None
 
 
 class CapacityOverviewRead(BaseModel):

@@ -53,7 +53,11 @@ def capacity_state(
     return CapacityState.NORMAL
 
 
-def _server_read(server: Server, metric: ServerMetric | None) -> CapacityServerRead:
+def _server_read(
+    server: Server,
+    metric: ServerMetric | None,
+    statistics: dict[str, float | int | None] | None = None,
+) -> CapacityServerRead:
     physical, operational, recommended, reserve = _limits(server)
     load = max(metric.output_mbps, 0.0) if metric is not None else None
     has_configuration = physical is not None and operational is not None and recommended is not None
@@ -61,6 +65,12 @@ def _server_read(server: Server, metric: ServerMetric | None) -> CapacityServerR
     operational_free = (
         max(operational - load, 0.0) if operational is not None and load is not None else None
     )
+    average = _number(statistics, "average_load_mbps")
+    maximum = _number(statistics, "maximum_load_mbps")
+    p95 = _number(statistics, "p95_load_mbps")
+    p99 = _number(statistics, "p99_load_mbps")
+    headroom = max(recommended - p95, 0.0) if recommended is not None and p95 is not None else None
+    operational_margin = operational - p95 if operational is not None and p95 is not None else None
     return CapacityServerRead(
         server_id=server.id,
         name=server.name,
@@ -78,6 +88,14 @@ def _server_read(server: Server, metric: ServerMetric | None) -> CapacityServerR
         safety_margin_mbps=_round(
             operational_free - reserve if operational_free is not None else None
         ),
+        sample_count=_integer(statistics, "sample_count"),
+        average_load_mbps=_round(average),
+        maximum_load_mbps=_round(maximum),
+        p95_load_mbps=_round(p95),
+        p99_load_mbps=_round(p99),
+        headroom_mbps=_round(headroom),
+        operational_margin_mbps=_round(operational_margin),
+        free_capacity_mbps=_round(physical_free),
         state=capacity_state(metric, physical, operational, recommended, reserve),
         data_quality=CapacityDataQuality.OBSERVED
         if metric is not None and has_configuration
@@ -93,14 +111,18 @@ class CapacityService:
         self._servers = ServerRepository(session)
 
     def list_servers(self) -> list[CapacityServerRead]:
+        statistics = self._servers.output_statistics()
         return [
-            _server_read(server, metric)
+            _server_read(server, metric, statistics.get(server.id))
             for server, metric, _ in self._servers.latest_enabled_with_cost()
         ]
 
     def build(self) -> CapacityOverviewRead:
         rows = self._servers.latest_enabled_with_cost()
-        servers = [_server_read(server, metric) for server, metric, _ in rows]
+        statistics = self._servers.output_statistics()
+        servers = [
+            _server_read(server, metric, statistics.get(server.id)) for server, metric, _ in rows
+        ]
         configured = [server for server, _, _ in rows if server.network_capacity_mbps is not None]
         sampled = [metric for _, metric, _ in rows if metric is not None]
         missing_data = [
@@ -132,3 +154,17 @@ class CapacityService:
             missing_data=missing_data,
             servers=servers,
         )
+
+
+def _number(statistics: dict[str, float | int | None] | None, key: str) -> float | None:
+    if not statistics:
+        return None
+    value = statistics.get(key)
+    return float(value) if isinstance(value, (float, int)) else None
+
+
+def _integer(statistics: dict[str, float | int | None] | None, key: str) -> int:
+    if not statistics:
+        return 0
+    value = statistics.get(key)
+    return int(value) if isinstance(value, (float, int)) else 0

@@ -76,6 +76,7 @@ export interface ServerResponse {
   tags: string[]
   type: string | null
   country: string | null
+  network_interface: string | null
   network_capacity_mbps: number | null
   network_speed_mbps: number | null
   operational_network_limit_mbps: number | null
@@ -101,6 +102,7 @@ export interface ServerWriteInput {
   datacenter?: string | null
   group?: string | null
   country?: string | null
+  network_interface?: string | null
   network_speed_mbps?: number | null
   prometheus_url?: string | null
   prometheus_token?: string | null
@@ -119,9 +121,25 @@ export interface ServerDiagnosticResponse {
   status: ApiDiagnosticStatus
   prometheus: ServerDiagnosticCheckResponse
   node_exporter: ServerDiagnosticCheckResponse
+  firewall: ServerDiagnosticCheckResponse | null
   last_sample_at: string | null
+  last_scrape_at: string | null
+  node_exporter_version: string | null
   latency_ms: number | null
+  inventory: Record<string, unknown> | null
   errors: string[]
+}
+
+export interface ServerInventorySnapshotResponse {
+  id: number
+  server_id: number
+  captured_at: string
+  source: string
+  node_exporter_version: string | null
+  prometheus_last_scrape_at: string | null
+  probe_latency_ms: number | null
+  status: string
+  inventory: Record<string, unknown>
 }
 
 export interface ServerMetricResponse {
@@ -338,6 +356,14 @@ export interface CapacityServerResponse {
   state: CapacityState
   data_quality: IntelligenceDataQuality
   last_collected_at: string | null
+  sample_count?: number
+  average_load_mbps?: number | null
+  maximum_load_mbps?: number | null
+  p95_load_mbps?: number | null
+  p99_load_mbps?: number | null
+  headroom_mbps?: number | null
+  operational_margin_mbps?: number | null
+  free_capacity_mbps?: number | null
 }
 
 export interface CapacityOverviewResponse {
