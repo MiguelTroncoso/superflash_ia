@@ -51,9 +51,9 @@ if command -v nft >/dev/null 2>&1 && nft list ruleset >/dev/null 2>&1; then
   nft list chain inet superflash_node_exporter input >/dev/null 2>&1 || \
     nft 'add chain inet superflash_node_exporter input { type filter hook input priority -100; policy accept; }'
   nft list chain inet superflash_node_exporter input | grep -Fq "ip saddr $MONITOR_IP tcp dport $NODE_EXPORTER_PORT accept" || \
-    nft add rule inet superflash_node_exporter input ip saddr "$MONITOR_IP" tcp dport "$NODE_EXPORTER_PORT" accept
+    nft add rule inet superflash_node_exporter input ip saddr "$MONITOR_IP" tcp dport "$NODE_EXPORTER_PORT" accept comment "$RULE_COMMENT"
   nft list chain inet superflash_node_exporter input | grep -Fq "tcp dport $NODE_EXPORTER_PORT drop" || \
-    nft add rule inet superflash_node_exporter input tcp dport "$NODE_EXPORTER_PORT" drop
+    nft add rule inet superflash_node_exporter input tcp dport "$NODE_EXPORTER_PORT" drop comment "$RULE_COMMENT"
   echo "firewall=nftables monitor_ip=$MONITOR_IP port=$NODE_EXPORTER_PORT"
   exit 0
 fi

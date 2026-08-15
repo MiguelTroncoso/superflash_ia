@@ -9,6 +9,9 @@ INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 SERVICE_FILE="/etc/systemd/system/node_exporter.service"
 MONITOR_IP="${MONITOR_IP:-178.104.98.19}"
 NODE_EXPORTER_VERSION="${NODE_EXPORTER_VERSION:-}"
+NODE_EXPORTER_PRIMARY_BASE_URL="${NODE_EXPORTER_PRIMARY_BASE_URL:-https://github.com/prometheus/node_exporter/releases/download}"
+NODE_EXPORTER_MIRROR_BASE_URL="${NODE_EXPORTER_MIRROR_BASE_URL:-}"
+NODE_EXPORTER_ALLOWED_SHA256="${NODE_EXPORTER_ALLOWED_SHA256:-}"
 SKIP_FIREWALL="${SKIP_FIREWALL:-0}"
 TMP_DIR="$(mktemp -d)"
 BACKUP_BINARY="${INSTALL_DIR}/node_exporter.superflash.bak"
@@ -40,10 +43,32 @@ if [[ -z "$NODE_EXPORTER_VERSION" ]]; then
 fi
 [[ -n "$NODE_EXPORTER_VERSION" ]] || { echo "No se pudo determinar la versión" >&2; exit 1; }
 ARCHIVE="node_exporter-${NODE_EXPORTER_VERSION}.linux-${ARCH}.tar.gz"
-BASE_URL="https://github.com/prometheus/node_exporter/releases/download/v${NODE_EXPORTER_VERSION}"
-curl --fail --silent --show-error --location -o "$TMP_DIR/$ARCHIVE" "$BASE_URL/$ARCHIVE"
-curl --fail --silent --show-error --location -o "$TMP_DIR/sha256sums.txt" "$BASE_URL/sha256sums.txt"
-(cd "$TMP_DIR" && grep "  $ARCHIVE$" sha256sums.txt | sha256sum -c -)
+download_and_verify() {
+  local base_url="${1%/}/v${NODE_EXPORTER_VERSION}"
+  rm -f "$TMP_DIR/$ARCHIVE" "$TMP_DIR/sha256sums.txt"
+  if ! curl --fail --silent --show-error --location -o "$TMP_DIR/$ARCHIVE" "$base_url/$ARCHIVE"; then
+    return 1
+  fi
+  if ! curl --fail --silent --show-error --location -o "$TMP_DIR/sha256sums.txt" "$base_url/sha256sums.txt"; then
+    return 1
+  fi
+  if ! (cd "$TMP_DIR" && grep -F "  $ARCHIVE" sha256sums.txt | sha256sum -c - >/dev/null); then
+    return 1
+  fi
+  if [[ -n "$NODE_EXPORTER_ALLOWED_SHA256" ]]; then
+    local actual_sha256
+    actual_sha256="$(sha256sum "$TMP_DIR/$ARCHIVE" | awk '{print $1}')"
+    [[ "$actual_sha256" == "$NODE_EXPORTER_ALLOWED_SHA256" ]] || return 1
+  fi
+  return 0
+}
+
+if ! download_and_verify "$NODE_EXPORTER_PRIMARY_BASE_URL"; then
+  if [[ -z "$NODE_EXPORTER_MIRROR_BASE_URL" ]] || ! download_and_verify "$NODE_EXPORTER_MIRROR_BASE_URL"; then
+    echo "No se pudo descargar y verificar el binario de Node Exporter." >&2
+    exit 1
+  fi
+fi
 tar -xzf "$TMP_DIR/$ARCHIVE" -C "$TMP_DIR"
 
 id node_exporter >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin node_exporter
