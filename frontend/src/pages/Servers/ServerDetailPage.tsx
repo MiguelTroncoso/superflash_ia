@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Link, useParams } from 'react-router'
+import { useState } from 'react'
 import { PageHeader } from '../../components/common/PageHeader'
 import { StatusBadge } from '../../components/common/StatusBadge'
 import { Surface } from '../../components/common/Surface'
@@ -19,8 +20,9 @@ import { DashboardFreshness } from '../../components/dashboard/DashboardFreshnes
 import { DashboardState } from '../../components/dashboard/DashboardState'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useServerDetailData } from '../../hooks/useServerDetailData'
+import { useServerOnboarding } from '../../hooks/useServerOnboarding'
 import { formatDateTime, formatNullablePercent, formatNullableThroughput, formatUptime } from '../../utils/formatters'
-import type { AlertResponse } from '../../types/api'
+import type { AlertResponse, MaintenanceAction } from '../../types/api'
 import type { HealthState } from '../../types/monitoring'
 
 export function ServerDetailPage(): React.JSX.Element {
@@ -28,6 +30,12 @@ export function ServerDetailPage(): React.JSX.Element {
   const { serverId } = useParams()
   const id = Number(serverId)
   const data = useServerDetailData(Number.isInteger(id) ? id : 0)
+  const maintenance = useServerOnboarding(null)
+  const [maintenanceOpen, setMaintenanceOpen] = useState(false)
+  const [authMethod, setAuthMethod] = useState<'private_key' | 'password'>('private_key')
+  const [privateKey, setPrivateKey] = useState('')
+  const [password, setPassword] = useState('')
+  const [targetVersion, setTargetVersion] = useState('')
 
   if (data.isLoading) {
     return <DashboardState state="loading" message="Loading server detail and read-only metrics." />
@@ -56,6 +64,13 @@ export function ServerDetailPage(): React.JSX.Element {
         lastUpdatedAt={data.lastUpdatedAt}
         onRefresh={() => void data.refetch()}
       />
+      <Surface className="mt-5 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h2 className="text-sm font-semibold text-copy">Managed Node Exporter</h2><p className="mt-1 text-xs text-muted">Actions use a closed server-side catalog. No arbitrary commands or host reboot.</p></div>
+          <button type="button" onClick={() => setMaintenanceOpen((value) => !value)} className="rounded-xl border border-line px-3 py-2 text-xs font-semibold text-copy">{maintenanceOpen ? 'Hide maintenance' : 'Diagnose / repair'}</button>
+        </div>
+        {maintenanceOpen && <MaintenanceForm authMethod={authMethod} setAuthMethod={setAuthMethod} privateKey={privateKey} setPrivateKey={setPrivateKey} password={password} setPassword={setPassword} targetVersion={targetVersion} setTargetVersion={setTargetVersion} busy={maintenance.maintenance.isPending} result={maintenance.maintenance.data?.message} error={Boolean(maintenance.maintenance.error)} onAction={(action) => { void runMaintenance(action) }} />}
+      </Surface>
       {data.isEmpty ? (
         <DashboardState state="empty" message="This server has no collected metric samples yet. No synthetic values are shown." />
       ) : (
@@ -131,6 +146,49 @@ export function ServerDetailPage(): React.JSX.Element {
       )}
     </>
   )
+
+  async function runMaintenance(action: MaintenanceAction): Promise<void> {
+    await maintenance.maintenance.mutateAsync({
+      serverId: id,
+      action,
+      payload: {
+        auth_method: authMethod,
+        password: authMethod === 'password' ? password : undefined,
+        private_key: authMethod === 'private_key' ? privateKey : undefined,
+        target_version: action === 'update' ? targetVersion || undefined : undefined,
+      },
+    })
+  }
+}
+
+function MaintenanceForm({
+  authMethod,
+  setAuthMethod,
+  privateKey,
+  setPrivateKey,
+  password,
+  setPassword,
+  targetVersion,
+  setTargetVersion,
+  busy,
+  result,
+  error,
+  onAction,
+}: {
+  authMethod: 'private_key' | 'password'
+  setAuthMethod: (value: 'private_key' | 'password') => void
+  privateKey: string
+  setPrivateKey: (value: string) => void
+  password: string
+  setPassword: (value: string) => void
+  targetVersion: string
+  setTargetVersion: (value: string) => void
+  busy: boolean
+  result: string | undefined
+  error: boolean
+  onAction: (action: MaintenanceAction) => void
+}): React.JSX.Element {
+  return <div className="mt-5 grid gap-3 sm:grid-cols-2"><label className="grid gap-2 text-xs text-muted">Authentication<select value={authMethod} onChange={(event) => setAuthMethod(event.target.value as 'private_key' | 'password')} className="rounded-xl border border-line bg-panel-raised px-3 py-2.5 text-copy"><option value="private_key">Private key</option><option value="password">Temporary password</option></select></label><label className="grid gap-2 text-xs text-muted">Target version (update only)<input value={targetVersion} onChange={(event) => setTargetVersion(event.target.value)} placeholder="1.8.2" className="rounded-xl border border-line bg-panel-raised px-3 py-2.5 text-copy" /></label>{authMethod === 'private_key' ? <label className="grid gap-2 text-xs text-muted sm:col-span-2">Private key<textarea value={privateKey} onChange={(event) => setPrivateKey(event.target.value)} rows={4} className="rounded-xl border border-line bg-panel-raised p-3 font-mono text-xs text-copy" autoComplete="off" /></label> : <label className="grid gap-2 text-xs text-muted">Temporary password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="rounded-xl border border-line bg-panel-raised px-3 py-2.5 text-copy" autoComplete="new-password" /></label>}<div className="flex flex-wrap gap-2 sm:col-span-2">{(['diagnose', 'repair', 'update', 'reinstall'] as MaintenanceAction[]).map((action) => <button key={action} type="button" disabled={busy} onClick={() => onAction(action)} className="rounded-xl border border-line px-3 py-2 text-xs font-semibold text-copy disabled:opacity-50">{action}</button>)}</div>{result && <p className="rounded-xl border border-line bg-panel-raised p-3 text-xs text-muted sm:col-span-2">{result}</p>}{error && <p className="rounded-xl border border-danger/30 bg-danger/10 p-3 text-xs text-danger sm:col-span-2">The managed action failed without exposing remote details.</p>}</div>
 }
 
 function MetricCard({ label, value, icon: Icon }: { label: string; value: string; icon: LucideIcon }): React.JSX.Element {

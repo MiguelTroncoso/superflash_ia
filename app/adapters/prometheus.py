@@ -57,9 +57,10 @@ class PrometheusAuthError(PrometheusSourceError):
     """Prometheus rechazó las credenciales (401/403)."""
 
 
-def build_queries(instance: str) -> dict[str, str]:
+def build_queries(instance: str, network_interface: str | None = None) -> dict[str, str]:
     """Consultas PromQL de node_exporter para una instancia del inventario."""
     i = f'instance="{instance}"'
+    nic_filter = f'device="{network_interface}"' if network_interface is not None else _NIC_FILTER
     return {
         "up": f"max(up{{{i}}})",
         "cpu_percent": (f'100 * (1 - avg(rate(node_cpu_seconds_total{{mode="idle",{i}}}[5m])))'),
@@ -79,10 +80,10 @@ def build_queries(instance: str) -> dict[str, str]:
             f"100 * (1 - (node_memory_SwapFree_bytes{{{i}}} / node_memory_SwapTotal_bytes{{{i}}}))"
         ),
         "input_mbps": (
-            f"sum(rate(node_network_receive_bytes_total{{{i},{_NIC_FILTER}}}[5m])) * 8 / 1000000"
+            f"sum(rate(node_network_receive_bytes_total{{{i},{nic_filter}}}[5m])) * 8 / 1000000"
         ),
         "output_mbps": (
-            f"sum(rate(node_network_transmit_bytes_total{{{i},{_NIC_FILTER}}}[5m])) * 8 / 1000000"
+            f"sum(rate(node_network_transmit_bytes_total{{{i},{nic_filter}}}[5m])) * 8 / 1000000"
         ),
         "io_read_mbps": (
             f"sum(rate(node_disk_read_bytes_total{{{i},{_DISK_FILTER}}}[5m])) * 8 / 1000000"
@@ -195,7 +196,7 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
         self, client: httpx.Client, server: InventoryServer, collected_at: datetime
     ) -> InfrastructureMetricSnapshot | None:
         """Consulta y normaliza las métricas de un host del inventario."""
-        queries = build_queries(server.node_exporter_instance)
+        queries = build_queries(server.node_exporter_instance, server.network_interface)
         up_value = self._query_value(client, queries.pop("up"))
         if up_value is not None and up_value < 1:
             logger.warning(
@@ -294,7 +295,7 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
         probes: list[HostProbe] = []
         with self._client() as client:
             for server in self._inventory.servers:
-                queries = build_queries(server.node_exporter_instance)
+                queries = build_queries(server.node_exporter_instance, server.network_interface)
                 probe = HostProbe(
                     external_id=server.external_id,
                     instance=server.node_exporter_instance,
@@ -383,6 +384,7 @@ class DatabasePrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
                         hostname=server.hostname,
                         role=server.role or ServerRole.OTHER,
                         network_capacity_mbps=server.network_capacity_mbps,
+                        network_interface=server.network_interface,
                         node_exporter_instance=_node_exporter_instance(server.hostname or ""),
                         enabled=server.enabled,
                     )

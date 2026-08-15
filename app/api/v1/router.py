@@ -7,7 +7,16 @@ Toda la versión 1 exige la cabecera ``X-API-Key`` (ver
 from fastapi import APIRouter, Depends
 
 from app.api.deps import require_api_key
-from app.api.v1 import alerts, balance, channels, collection, overview, recommendations, servers
+from app.api.v1 import (
+    alerts,
+    balance,
+    channels,
+    collection,
+    onboarding,
+    overview,
+    recommendations,
+    servers,
+)
 
 api_v1_router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_key)])
 api_v1_router.include_router(servers.router)
@@ -17,3 +26,4 @@ api_v1_router.include_router(overview.router)
 api_v1_router.include_router(alerts.router)
 api_v1_router.include_router(balance.router)
 api_v1_router.include_router(recommendations.router)
+api_v1_router.include_router(onboarding.router)

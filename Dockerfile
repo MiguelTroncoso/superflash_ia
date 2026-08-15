@@ -13,6 +13,7 @@ WORKDIR /srv/app
 COPY pyproject.toml README.md ./
 COPY app ./app
 COPY alembic ./alembic
+COPY scripts ./scripts
 COPY alembic.ini ./
 
 RUN pip install .

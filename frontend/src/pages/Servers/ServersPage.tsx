@@ -1,5 +1,5 @@
 import { Link } from 'react-router'
-import { ChevronDown, ChevronUp, Search, Server } from 'lucide-react'
+import { ChevronDown, ChevronUp, Plus, Search, Server } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { PageHeader } from '../../components/common/PageHeader'
 import { StatusBadge } from '../../components/common/StatusBadge'
@@ -8,6 +8,7 @@ import { DashboardFreshness } from '../../components/dashboard/DashboardFreshnes
 import { DashboardState } from '../../components/dashboard/DashboardState'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useServersData } from '../../hooks/useServersData'
+import { ServerOnboardingDialog } from '../../components/servers/ServerOnboardingDialog'
 import { formatNullablePercent, formatNullableThroughput, formatUptime } from '../../utils/formatters'
 
 type SortKey = 'status' | 'name' | 'cpu' | 'memory' | 'disk' | 'network' | 'uptime' | 'group' | 'provider' | 'country'
@@ -23,6 +24,7 @@ export function ServersPage(): React.JSX.Element {
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [ascending, setAscending] = useState(true)
   const [page, setPage] = useState(1)
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
   const data = useServersData({
     page,
     page_size: PAGE_SIZE,
@@ -59,6 +61,7 @@ export function ServersPage(): React.JSX.Element {
         eyebrow="Infrastructure"
         title="Servers"
         description="Managed inventory with current health and latest read-only metrics."
+        action={<button type="button" onClick={() => setOnboardingOpen(true)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 text-xs font-semibold text-slate-950"><Plus size={15} />Add server</button>}
       />
       <DashboardFreshness
         isFetching={data.isFetching}
@@ -132,6 +135,7 @@ export function ServersPage(): React.JSX.Element {
           </div>
         </div>
       </Surface>
+      {onboardingOpen && <ServerOnboardingDialog onClose={() => setOnboardingOpen(false)} />}
     </>
   )
 

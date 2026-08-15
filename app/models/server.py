@@ -1,12 +1,14 @@
 """Modelos ORM de servidores y sus métricas históricas."""
 
 import enum
-from datetime import datetime
+from datetime import date, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -20,6 +22,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
+
+if TYPE_CHECKING:
+    from app.models.onboarding import ServerInventorySnapshot, ServerOnboarding
 
 # En SQLite (tests) un BIGINT no autoincrementa como clave primaria;
 # esta variante mantiene BIGINT en PostgreSQL e INTEGER en SQLite.
@@ -69,6 +74,25 @@ class Server(Base):
     server_type: Mapped[str | None] = mapped_column("type", String(80), index=True)
     country: Mapped[str | None] = mapped_column(String(2), index=True)
     network_capacity_mbps: Mapped[float | None] = mapped_column(Float)
+    network_interface: Mapped[str | None] = mapped_column(String(100), index=True)
+    operational_network_limit_mbps: Mapped[float | None] = mapped_column(Float)
+    recommended_network_limit_mbps: Mapped[float | None] = mapped_column(Float)
+    minimum_network_reserve_mbps: Mapped[float | None] = mapped_column(Float)
+    monthly_cost: Mapped[float | None] = mapped_column(Float)
+    currency: Mapped[str | None] = mapped_column(String(3))
+    next_payment_date: Mapped[date | None] = mapped_column(Date)
+    auto_renew: Mapped[bool] = mapped_column(Boolean, default=False)
+    contract_status: Mapped[str] = mapped_column(String(30), default="unknown")
+    ssh_port: Mapped[int] = mapped_column(Integer, default=22)
+    ssh_username: Mapped[str | None] = mapped_column(String(120))
+    ssh_host_key_fingerprint: Mapped[str | None] = mapped_column(String(100))
+    ssh_management_configured: Mapped[bool] = mapped_column(Boolean, default=False)
+    ssh_management_key_fingerprint: Mapped[str | None] = mapped_column(String(100))
+    ssh_management_key_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ssh_management_key_rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    node_exporter_status: Mapped[str] = mapped_column(String(20), default="unknown")
+    node_exporter_version: Mapped[str | None] = mapped_column(String(40))
+    prometheus_active: Mapped[bool] = mapped_column(Boolean, default=True)
     prometheus_url: Mapped[str | None] = mapped_column(String(500))
     prometheus_token: Mapped[str | None] = mapped_column(String(1000))
     heartbeat_interval_seconds: Mapped[int] = mapped_column(Integer, default=300)
@@ -91,6 +115,12 @@ class Server(Base):
     )
 
     metrics: Mapped[list["ServerMetric"]] = relationship(
+        back_populates="server", cascade="all, delete-orphan", passive_deletes=True
+    )
+    onboardings: Mapped[list["ServerOnboarding"]] = relationship(
+        back_populates="server", cascade="all, delete-orphan", passive_deletes=True
+    )
+    inventory_snapshots: Mapped[list["ServerInventorySnapshot"]] = relationship(
         back_populates="server", cascade="all, delete-orphan", passive_deletes=True
     )
 

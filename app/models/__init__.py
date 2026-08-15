@@ -15,6 +15,11 @@ from app.models.channel import (
     TechnicalStream,
 )
 from app.models.collection_run import CollectionRun, CollectionRunStatus, CollectionTrigger
+from app.models.onboarding import (
+    OnboardingAuditEvent,
+    ServerInventorySnapshot,
+    ServerOnboarding,
+)
 from app.models.server import Server, ServerMetric, ServerOperationalStatus, ServerRole
 
 __all__ = [
@@ -30,8 +35,11 @@ __all__ = [
     "CollectionRun",
     "CollectionRunStatus",
     "CollectionTrigger",
+    "OnboardingAuditEvent",
     "Server",
+    "ServerInventorySnapshot",
     "ServerMetric",
+    "ServerOnboarding",
     "ServerOperationalStatus",
     "ServerRole",
     "TechnicalStream",

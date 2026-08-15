@@ -52,6 +52,22 @@ class Settings(BaseSettings):
     # Ejemplo sin datos reales: config/inventory.example.yaml
     infrastructure_inventory_file: str | None = None
 
+    # SSH onboarding: credentials are accepted only for the in-memory job and
+    # host keys are verified against this operator-managed file.
+    ssh_known_hosts_file: str = "/etc/ssh/ssh_known_hosts"
+    ssh_connect_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    ssh_command_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    ssh_retry_count: int = Field(default=2, ge=0, le=5)
+    onboarding_monitor_ip: str = "178.104.98.19"
+    node_exporter_version: str | None = None
+    node_exporter_primary_base_url: str = (
+        "https://github.com/prometheus/node_exporter/releases/download"
+    )
+    node_exporter_mirror_base_url: str | None = None
+    node_exporter_allowed_sha256: str | None = None
+    ssh_management_private_key_file: str | None = None
+    onboarding_enabled: bool = True
+
     # Clave requerida por TODOS los endpoints /api/v1 (cabecera X-API-Key).
     # Sin clave configurada, la API se niega a operar (fail-closed).
     # Se acepta el nombre histórico COLLECTION_API_KEY como alias.

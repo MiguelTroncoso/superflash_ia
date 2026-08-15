@@ -12,6 +12,15 @@ import type {
   ServerPageResponse,
   ServerResponse,
   RecommendationsResponse,
+  OnboardingAuditResponse,
+  OnboardingDiagnosisResponse,
+  OnboardingDiscoveryRequest,
+  OnboardingDiscoveryResponse,
+  OnboardingHealthResponse,
+  MaintenanceAction,
+  MaintenanceResponse,
+  OnboardingResponse,
+  OnboardingStartRequest,
 } from '../types/api'
 
 const API_V1_PREFIX = '/api/v1'
@@ -71,6 +80,30 @@ export const apiService = {
   getBalance: (): Promise<BalanceResponse> => getData(`${API_V1_PREFIX}/balance`),
   getRecommendations: (): Promise<RecommendationsResponse> =>
     getData(`${API_V1_PREFIX}/recommendations`),
+  startOnboarding: (payload: OnboardingStartRequest): Promise<OnboardingResponse> =>
+    httpClient.post<OnboardingResponse>(`${API_V1_PREFIX}/onboarding`, payload).then(({ data }) => data),
+  discoverOnboarding: (payload: OnboardingDiscoveryRequest): Promise<OnboardingDiscoveryResponse> =>
+    httpClient.post<OnboardingDiscoveryResponse>(`${API_V1_PREFIX}/onboarding/discover`, payload).then(({ data }) => data),
+  getOnboarding: (onboardingId: number): Promise<OnboardingResponse> =>
+    getData(`${API_V1_PREFIX}/onboarding/${onboardingId}`),
+  getOnboardingAudit: (onboardingId: number): Promise<OnboardingAuditResponse[]> =>
+    getData(`${API_V1_PREFIX}/onboarding/${onboardingId}/audit`),
+  getOnboardingHealth: (onboardingId: number): Promise<OnboardingHealthResponse> =>
+    getData(`${API_V1_PREFIX}/onboarding/${onboardingId}/health`),
+  diagnoseOnboarding: (onboardingId: number, payload: Pick<OnboardingStartRequest, 'auth_method' | 'password' | 'private_key'>): Promise<OnboardingDiagnosisResponse> =>
+    httpClient.post<OnboardingDiagnosisResponse>(`${API_V1_PREFIX}/onboarding/${onboardingId}/diagnose`, payload).then(({ data }) => data),
+  retryOnboarding: (onboardingId: number, payload: Pick<OnboardingStartRequest, 'auth_method' | 'password' | 'private_key'>): Promise<OnboardingResponse> =>
+    httpClient.post<OnboardingResponse>(`${API_V1_PREFIX}/onboarding/${onboardingId}/retry`, payload).then(({ data }) => data),
+  cancelOnboarding: (onboardingId: number): Promise<OnboardingResponse> =>
+    httpClient.post<OnboardingResponse>(`${API_V1_PREFIX}/onboarding/${onboardingId}/cancel`).then(({ data }) => data),
+  rollbackOnboarding: (onboardingId: number, payload: Pick<OnboardingStartRequest, 'auth_method' | 'password' | 'private_key'>): Promise<OnboardingResponse> =>
+    httpClient.post<OnboardingResponse>(`${API_V1_PREFIX}/onboarding/${onboardingId}/rollback`, payload).then(({ data }) => data),
+  maintenance: (
+    serverId: number,
+    action: MaintenanceAction,
+    payload: Pick<OnboardingStartRequest, 'auth_method' | 'password' | 'private_key'> & { target_version?: string },
+  ): Promise<MaintenanceResponse> =>
+    httpClient.post<MaintenanceResponse>(`${API_V1_PREFIX}/onboarding/server/${serverId}/maintenance/${action}`, payload).then(({ data }) => data),
   updateAlert: (alertId: number, status: 'active' | 'acknowledged' | 'resolved') =>
     httpClient.patch(`${API_V1_PREFIX}/alerts/${alertId}`, { status }),
 }

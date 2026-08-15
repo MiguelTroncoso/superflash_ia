@@ -77,6 +77,13 @@ export interface ServerResponse {
   network_capacity_mbps: number | null
   network_speed_mbps: number | null
   prometheus_configured: boolean
+  ssh_host_key_fingerprint?: string | null
+  ssh_management_configured?: boolean
+  ssh_management_key_fingerprint?: string | null
+  ssh_management_key_created_at?: string | null
+  ssh_management_key_rotated_at?: string | null
+  node_exporter_status?: string
+  node_exporter_version?: string | null
   heartbeat_interval_seconds: number
   last_heartbeat_at: string | null
   status: 'online' | 'degraded' | 'offline' | 'unknown' | 'maintenance'
@@ -277,4 +284,146 @@ export interface RecommendationResponse {
 export interface RecommendationsResponse {
   generated_at: string
   recommendations: RecommendationResponse[]
+}
+
+export type OnboardingAuthMethod = 'password' | 'private_key'
+export type OnboardingStatus =
+  | 'pending'
+  | 'connecting'
+  | 'authenticating'
+  | 'discovering'
+  | 'installing_exporter'
+  | 'configuring_firewall'
+  | 'verifying_exporter'
+  | 'registering_inventory'
+  | 'configuring_monitoring'
+  | 'validating'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'rollback_required'
+
+export interface OnboardingResponse {
+  id: number
+  server_id: number
+  status: OnboardingStatus
+  current_step: string
+  progress_percent: number
+  started_at: string | null
+  completed_at: string | null
+  failed_at: string | null
+  last_error_code: string | null
+  last_error_message_sanitized: string | null
+  retry_count: number
+  last_successful_step: string | null
+  created_by: string
+  auth_method: OnboardingAuthMethod
+  ssh_port: number
+  ssh_username: string
+  cancel_requested: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface OnboardingAuditResponse {
+  id: number
+  actor: string
+  event: string
+  step: string
+  success: boolean
+  detail_sanitized: string
+  created_at: string
+}
+
+export interface OnboardingDiagnosisResponse {
+  status: 'PASS' | 'PARTIAL' | 'FAIL'
+  node_exporter: 'PASS' | 'PARTIAL' | 'FAIL'
+  prometheus: 'PASS' | 'PARTIAL' | 'FAIL'
+  firewall: 'PASS' | 'PARTIAL' | 'FAIL'
+  network: 'PASS' | 'PARTIAL' | 'FAIL'
+  latency_ms: number | null
+  last_sample: string | null
+  errors: string[]
+}
+
+export interface OnboardingDiscoveryRequest {
+  host: string
+  port: number
+  username: string
+  auth_method: OnboardingAuthMethod
+  password?: string
+  private_key?: string
+  host_key_fingerprint?: string
+  confirm_host_key?: boolean
+}
+
+export interface OnboardingDiscoveryResponse {
+  reachable: boolean
+  authentication_ok: boolean
+  privilege_ok: boolean
+  discovered_inventory: Record<string, unknown> | null
+  host_key_fingerprint: string | null
+  host_key_status: string
+  detected_firewall: string
+  detected_interface: string | null
+  link_speed_mbps: number | null
+  exporter_status: string
+  exporter_version: string | null
+  port_9100_status: string
+  systemd_available: boolean
+  warnings: string[]
+  blocking_errors: string[]
+}
+
+export interface OnboardingHealthResponse {
+  onboarding_status: string
+  ssh: string
+  privilege: string
+  node_exporter: string
+  exporter_version: string | null
+  firewall: string
+  prometheus: string
+  inventory: string
+  network_interface: string | null
+  metrics_available: boolean
+  last_scrape: string | null
+  scrape_age_seconds: number | null
+  freshness: string
+  latency_ms: number | null
+  overall_status: string
+}
+
+export type MaintenanceAction = 'diagnose' | 'repair' | 'update' | 'reinstall'
+
+export interface MaintenanceResponse {
+  action: MaintenanceAction
+  status: string
+  message: string
+  exporter_status: string
+  exporter_version: string | null
+}
+
+export interface OnboardingStartRequest {
+  name: string
+  ip: string
+  ssh_port: number
+  ssh_username: string
+  host_key_fingerprint: string
+  network_interface?: string
+  auth_method: OnboardingAuthMethod
+  password?: string
+  private_key?: string
+  provider?: string
+  datacenter?: string
+  country?: string
+  server_type?: string
+  physical_capacity_mbps?: number
+  operational_target_mbps?: number
+  recommended_max_mbps?: number
+  minimum_reserve_mbps?: number
+  monthly_cost?: number
+  currency?: string
+  next_payment_date?: string
+  auto_renew?: boolean
+  notes?: string
 }
