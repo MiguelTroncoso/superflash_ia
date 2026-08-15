@@ -3,11 +3,10 @@
 Plataforma privada de monitoreo y análisis para una infraestructura
 autorizada de distribución de contenido audiovisual.
 
-> ⚠️ **La versión actual utiliza únicamente datos simulados y no
-> modifica ninguna infraestructura externa.** La aplicación es
-> exclusivamente de lectura y monitoreo: no mueve canales, no toca
-> configuraciones de paneles externos y no ejecuta ninguna acción
-> remota.
+> ⚠️ El mock continúa siendo la fuente por defecto. El onboarding SSH es una
+> operación explícita y protegida para servidores autorizados: no ofrece
+> terminal remoto, no acepta comandos arbitrarios y solo administra los
+> componentes de SuperFlash documentados en [`docs/ssh-auto-onboarding.md`](docs/ssh-auto-onboarding.md).
 
 ## Propósito
 
@@ -54,6 +53,9 @@ versión solo observa.
   (solo GET), con inventario local no versionado, timeout y bearer token
   configurables, TLS verificado y obligatorio en producción. La fuente
   de streaming real aún no existe.
+- **SSH auto-onboarding controlado**: flujo reanudable con host keys
+  verificadas, prechecks, Node Exporter idempotente, firewall restringido,
+  snapshots históricos, auditoría y rollback limitado a componentes propios.
 - API de consulta: servidores, canales, históricos por rango de fechas y
   resumen agregado (`/api/v1/overview`).
 - Historial de recolecciones con **heartbeat persistido**: una ejecución
@@ -177,6 +179,12 @@ overview y el endpoint de estado.
 | GET  | `/api/v1/collection/status` | Estado persistido del recolector y del scheduler |
 | GET  | `/api/v1/alerts` | Alertas internas según las últimas muestras |
 | GET  | `/api/v1/overview` | Estadísticas agregadas actuales |
+| POST | `/api/v1/onboarding` | Inicia preparación SSH controlada |
+| GET  | `/api/v1/onboarding/{id}` | Estado persistido del onboarding |
+| GET  | `/api/v1/onboarding/{id}/audit` | Auditoría sanitizada del onboarding |
+| POST | `/api/v1/onboarding/{id}/retry` | Reintenta con credencial efímera |
+| POST | `/api/v1/onboarding/{id}/cancel` | Solicita cancelación segura |
+| POST | `/api/v1/onboarding/{id}/rollback` | Retira solo componentes gestionados |
 
 ### Autenticación
 
