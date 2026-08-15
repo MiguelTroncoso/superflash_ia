@@ -1,6 +1,6 @@
 """Esquemas de respuesta para servidores y sus métricas."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -21,7 +21,18 @@ class ServerFields(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=50)
     type: str | None = Field(default=None, max_length=80)
     country: str | None = Field(default=None, min_length=2, max_length=2)
+    network_interface: str | None = Field(
+        default=None, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$"
+    )
     network_speed_mbps: float | None = Field(default=None, ge=0)
+    operational_network_limit_mbps: float | None = Field(default=None, ge=0)
+    recommended_network_limit_mbps: float | None = Field(default=None, ge=0)
+    minimum_network_reserve_mbps: float | None = Field(default=None, ge=0)
+    monthly_cost: float | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    next_payment_date: date | None = None
+    auto_renew: bool = False
+    contract_status: str = Field(default="unknown", max_length=30)
     prometheus_url: str | None = Field(default=None, max_length=500)
     prometheus_token: str | None = Field(default=None, max_length=1000)
     heartbeat_interval_seconds: int = Field(default=300, ge=30, le=86_400)
@@ -52,7 +63,18 @@ class ServerUpdate(BaseModel):
     tags: list[str] | None = Field(default=None, max_length=50)
     type: str | None = Field(default=None, max_length=80)
     country: str | None = Field(default=None, min_length=2, max_length=2)
+    network_interface: str | None = Field(
+        default=None, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$"
+    )
     network_speed_mbps: float | None = Field(default=None, ge=0)
+    operational_network_limit_mbps: float | None = Field(default=None, ge=0)
+    recommended_network_limit_mbps: float | None = Field(default=None, ge=0)
+    minimum_network_reserve_mbps: float | None = Field(default=None, ge=0)
+    monthly_cost: float | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    next_payment_date: date | None = None
+    auto_renew: bool | None = None
+    contract_status: str | None = Field(default=None, max_length=30)
     prometheus_url: str | None = Field(default=None, max_length=500)
     prometheus_token: str | None = Field(default=None, max_length=1000)
     heartbeat_interval_seconds: int | None = Field(default=None, ge=30, le=86_400)
@@ -82,8 +104,17 @@ class ServerRead(BaseModel):
     tags: list[str]
     type: str | None
     country: str | None
+    network_interface: str | None
     network_capacity_mbps: float | None
     network_speed_mbps: float | None
+    operational_network_limit_mbps: float | None
+    recommended_network_limit_mbps: float | None
+    minimum_network_reserve_mbps: float | None
+    monthly_cost: float | None
+    currency: str | None
+    next_payment_date: date | None
+    auto_renew: bool
+    contract_status: str
     prometheus_configured: bool
     heartbeat_interval_seconds: int
     last_heartbeat_at: datetime | None
