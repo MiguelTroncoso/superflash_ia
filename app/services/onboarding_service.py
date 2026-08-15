@@ -757,8 +757,14 @@ class OnboardingService:
                 as_root=True,
                 sudo_password=credentials.password,
             )
-            firewall_has_monitor = self._settings.onboarding_monitor_ip in firewall.stdout
-            result["firewall"] = "PASS" if firewall.ok and firewall_has_monitor else "PARTIAL"
+            firewall_status = detect_firewall(firewall.stdout, self._settings.onboarding_monitor_ip)
+            result["firewall"] = {
+                "restricted": "PASS",
+                "partial": "PARTIAL",
+                "exposed": "FAIL",
+                "not_configured": "FAIL",
+                "unknown": "FAIL",
+            }.get(firewall_status, "FAIL")
             inventory = parse_inventory_output(ssh.run(SSHOperation.DETECT_INVENTORY).stdout)
             result["network"] = (
                 "PASS" if _network_is_valid(server.network_interface, inventory) else "FAIL"
@@ -766,7 +772,11 @@ class OnboardingService:
             if result["node_exporter"] != "PASS":
                 errors.append("Node Exporter no responde")
             if result["firewall"] != "PASS":
-                errors.append("No se pudo confirmar el acceso restringido del firewall")
+                errors.append(
+                    "Puerto 9100 expuesto o firewall administrado no confirmado"
+                    if firewall_status == "exposed"
+                    else "No se pudo confirmar el acceso restringido del firewall"
+                )
             if result["network"] != "PASS":
                 errors.append("La interfaz de red configurada no está disponible")
             if server.prometheus_url and self._probe_prometheus(server):
