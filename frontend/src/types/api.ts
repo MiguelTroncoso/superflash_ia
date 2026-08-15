@@ -278,3 +278,86 @@ export interface RecommendationsResponse {
   generated_at: string
   recommendations: RecommendationResponse[]
 }
+
+export type OnboardingAuthMethod = 'password' | 'private_key'
+export type OnboardingStatus =
+  | 'pending'
+  | 'connecting'
+  | 'authenticating'
+  | 'discovering'
+  | 'installing_exporter'
+  | 'configuring_firewall'
+  | 'verifying_exporter'
+  | 'registering_inventory'
+  | 'configuring_monitoring'
+  | 'validating'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'rollback_required'
+
+export interface OnboardingResponse {
+  id: number
+  server_id: number
+  status: OnboardingStatus
+  current_step: string
+  progress_percent: number
+  started_at: string | null
+  completed_at: string | null
+  failed_at: string | null
+  last_error_code: string | null
+  last_error_message_sanitized: string | null
+  retry_count: number
+  last_successful_step: string | null
+  created_by: string
+  auth_method: OnboardingAuthMethod
+  ssh_port: number
+  ssh_username: string
+  cancel_requested: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface OnboardingAuditResponse {
+  id: number
+  actor: string
+  event: string
+  step: string
+  success: boolean
+  detail_sanitized: string
+  created_at: string
+}
+
+export interface OnboardingDiagnosisResponse {
+  status: 'PASS' | 'PARTIAL' | 'FAIL'
+  node_exporter: 'PASS' | 'PARTIAL' | 'FAIL'
+  prometheus: 'PASS' | 'PARTIAL' | 'FAIL'
+  firewall: 'PASS' | 'PARTIAL' | 'FAIL'
+  network: 'PASS' | 'PARTIAL' | 'FAIL'
+  latency_ms: number | null
+  last_sample: string | null
+  errors: string[]
+}
+
+export interface OnboardingStartRequest {
+  name: string
+  ip: string
+  ssh_port: number
+  ssh_username: string
+  auth_method: OnboardingAuthMethod
+  password?: string
+  private_key?: string
+  provider?: string
+  datacenter?: string
+  country?: string
+  server_type?: string
+  physical_capacity_mbps?: number
+  operational_target_mbps?: number
+  recommended_max_mbps?: number
+  minimum_reserve_mbps?: number
+  monthly_cost?: number
+  currency?: string
+  next_payment_date?: string
+  auto_renew?: boolean
+  notes?: string
+}

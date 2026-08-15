@@ -12,6 +12,10 @@ import type {
   ServerPageResponse,
   ServerResponse,
   RecommendationsResponse,
+  OnboardingAuditResponse,
+  OnboardingDiagnosisResponse,
+  OnboardingResponse,
+  OnboardingStartRequest,
 } from '../types/api'
 
 const API_V1_PREFIX = '/api/v1'
@@ -71,6 +75,20 @@ export const apiService = {
   getBalance: (): Promise<BalanceResponse> => getData(`${API_V1_PREFIX}/balance`),
   getRecommendations: (): Promise<RecommendationsResponse> =>
     getData(`${API_V1_PREFIX}/recommendations`),
+  startOnboarding: (payload: OnboardingStartRequest): Promise<OnboardingResponse> =>
+    httpClient.post<OnboardingResponse>(`${API_V1_PREFIX}/onboarding`, payload).then(({ data }) => data),
+  getOnboarding: (onboardingId: number): Promise<OnboardingResponse> =>
+    getData(`${API_V1_PREFIX}/onboarding/${onboardingId}`),
+  getOnboardingAudit: (onboardingId: number): Promise<OnboardingAuditResponse[]> =>
+    getData(`${API_V1_PREFIX}/onboarding/${onboardingId}/audit`),
+  diagnoseOnboarding: (onboardingId: number, payload: Pick<OnboardingStartRequest, 'auth_method' | 'password' | 'private_key'>): Promise<OnboardingDiagnosisResponse> =>
+    httpClient.post<OnboardingDiagnosisResponse>(`${API_V1_PREFIX}/onboarding/${onboardingId}/diagnose`, payload).then(({ data }) => data),
+  retryOnboarding: (onboardingId: number, payload: Pick<OnboardingStartRequest, 'auth_method' | 'password' | 'private_key'>): Promise<OnboardingResponse> =>
+    httpClient.post<OnboardingResponse>(`${API_V1_PREFIX}/onboarding/${onboardingId}/retry`, payload).then(({ data }) => data),
+  cancelOnboarding: (onboardingId: number): Promise<OnboardingResponse> =>
+    httpClient.post<OnboardingResponse>(`${API_V1_PREFIX}/onboarding/${onboardingId}/cancel`).then(({ data }) => data),
+  rollbackOnboarding: (onboardingId: number, payload: Pick<OnboardingStartRequest, 'auth_method' | 'password' | 'private_key'>): Promise<OnboardingResponse> =>
+    httpClient.post<OnboardingResponse>(`${API_V1_PREFIX}/onboarding/${onboardingId}/rollback`, payload).then(({ data }) => data),
   updateAlert: (alertId: number, status: 'active' | 'acknowledged' | 'resolved') =>
     httpClient.patch(`${API_V1_PREFIX}/alerts/${alertId}`, { status }),
 }

@@ -93,4 +93,26 @@ describe('apiService', () => {
 
     expect(get).toHaveBeenCalledWith('/health', undefined)
   })
+
+  it('posts onboarding credentials only to the protected same-origin endpoint', async () => {
+    const post = vi.spyOn(httpClient, 'post').mockResolvedValue({
+      data: { id: 12, status: 'pending' },
+    } as never)
+
+    await apiService.startOnboarding({
+      name: 'Live 1',
+      ip: '203.0.113.10',
+      ssh_port: 22,
+      ssh_username: 'root',
+      auth_method: 'private_key',
+      private_key: 'ephemeral-test-key',
+    })
+
+    expect(post).toHaveBeenCalledWith('/api/v1/onboarding', expect.objectContaining({
+      auth_method: 'private_key',
+      private_key: 'ephemeral-test-key',
+    }))
+    expect(post.mock.calls[0]?.[1]).not.toHaveProperty('api_key')
+    expect(post.mock.calls[0]?.[1]).not.toHaveProperty('x-api-key')
+  })
 })

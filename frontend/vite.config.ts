@@ -12,6 +12,9 @@ export default defineConfig({
     host: true,
     port: 4173,
   },
+  build: {
+    sourcemap: false,
+  },
   test: {
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
