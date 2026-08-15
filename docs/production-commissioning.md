@@ -96,8 +96,9 @@ del VPS Monitor que ejecuta Prometheus y rechaza el resto:
 
 ```bash
 export MONITOR_VPS_IP=203.0.113.10
-sudo ufw deny 9100/tcp
-sudo ufw allow from "$MONITOR_VPS_IP" to any port 9100 proto tcp
+# UFW evaluates rules in order: allow the monitor before denying other sources.
+sudo ufw insert 1 allow from "$MONITOR_VPS_IP" to any port 9100 proto tcp
+sudo ufw insert 2 deny 9100/tcp
 sudo ufw status numbered
 ```
 

@@ -39,6 +39,8 @@ def test_firewall_script_does_not_remove_existing_rules() -> None:
     assert "178.104.98.19" in content
     assert "rm -rf" not in content
     assert "iptables -C" in content
+    assert 'ufw insert 1 allow from "$MONITOR_IP"' in content
+    assert 'ufw insert 2 deny "$NODE_EXPORTER_PORT/tcp"' in content
 
 
 def test_agent_has_no_remote_connection_or_listener() -> None:

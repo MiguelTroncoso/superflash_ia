@@ -90,7 +90,7 @@ def test_distribution_reports_unassigned_load_without_exceeding_limits() -> None
 def test_capacity_costs_and_payment_due_are_read_only(client, session) -> None:
     server = _server(session, "intel-1", "Intelligence 1")
     _metric(session, server, 750)
-    _cost(session, server, 53, date(2026, 8, 5))
+    _cost(session, server, 53, date.today() + timedelta(days=5))
     session.commit()
 
     capacity = client.get("/api/v1/capacity/overview")

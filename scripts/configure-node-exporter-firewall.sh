@@ -16,7 +16,10 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
-  ufw allow from "$MONITOR_IP" to any port "$NODE_EXPORTER_PORT" proto tcp >/dev/null
+  # Keep the monitor allow rule before the catch-all deny rule. UFW evaluates
+  # rules in order, so appending allow and inserting deny first would block
+  # the Prometheus scrape as well.
+  ufw insert 1 allow from "$MONITOR_IP" to any port "$NODE_EXPORTER_PORT" proto tcp >/dev/null || true
   ufw insert 2 deny "$NODE_EXPORTER_PORT/tcp" >/dev/null || true
   echo "firewall=ufw monitor_ip=$MONITOR_IP port=$NODE_EXPORTER_PORT"
   exit 0
