@@ -191,7 +191,7 @@ class CollectionService:
                             active_connections=metric.active_connections,
                             active_streams=metric.active_streams,
                             uptime_seconds=metric.uptime_seconds,
-                            source=self._adapter.source_name,
+                            source=metric.source or self._adapter.source_name,
                         )
                     )
                     server = self._servers.get(server_id)

@@ -45,6 +45,9 @@ export function ActivityTable({ rows }: ActivityTableProps): React.JSX.Element {
                       <p className="mt-1 text-[11px] text-muted">
                         {server.hostname ?? 'Hostname unavailable'}
                       </p>
+                      <p className="mt-1 text-[10px] uppercase tracking-wider text-brand">
+                        {server.source === 'prometheus' ? 'Real · Prometheus' : server.source ? 'Mock fallback' : 'No sample'}
+                      </p>
                     </div>
                   </div>
                 </td>

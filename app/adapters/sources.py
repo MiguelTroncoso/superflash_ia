@@ -54,6 +54,8 @@ class InfrastructureMetricSnapshot(BaseModel):
     load_average_15m: float | None = Field(default=None, ge=0)
     uptime_seconds: int | None = Field(default=None, ge=0)
     status: ServerStatus = ServerStatus.UNKNOWN
+    # La fuente efectiva se conserva al combinar Prometheus y MOCK.
+    source: str | None = None
 
 
 class StreamingChannelMetricSnapshot(BaseModel):

@@ -47,6 +47,9 @@ class ServerMetricSnapshot(BaseModel):
     active_connections: int = Field(ge=0)
     active_streams: int = Field(ge=0)
     uptime_seconds: int | None = Field(default=None, ge=0)
+    # Permite conservar la fuente efectiva cuando un adapter compuesto mezcla
+    # Prometheus real con fallback MOCK por servidor.
+    source: str | None = None
 
 
 class ChannelSnapshot(BaseModel):

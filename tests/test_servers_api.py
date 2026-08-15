@@ -2,6 +2,10 @@
 
 from datetime import UTC, datetime
 
+import pytest
+
+from app.adapters.prometheus import HostProbe
+from app.api.v1 import servers as servers_api
 from app.models import Server, ServerMetric, ServerRole
 
 
@@ -152,3 +156,185 @@ def test_server_inventory_rejects_duplicate_external_id(client):
     assert client.post("/api/v1/servers", json=payload).status_code == 201
     duplicate = client.post("/api/v1/servers", json=payload)
     assert duplicate.status_code == 409
+
+
+def test_server_diagnose_reports_prometheus_and_node_exporter(monkeypatch, client, session):
+    """El diagnóstico HTTP entrega estado, latencia y ningún secreto."""
+    server = Server(
+        external_id="srv-diagnose",
+        name="Diagnose",
+        hostname="node.example.internal",
+        role=ServerRole.LIVE,
+        prometheus_url="https://prometheus.internal",
+        prometheus_token="diagnostic-secret",
+    )
+    session.add(server)
+    session.flush()
+    session.add(
+        ServerMetric(
+            server_id=server.id,
+            collected_at=datetime(2026, 7, 23, 12, 0, tzinfo=UTC),
+            cpu_percent=10,
+            memory_percent=20,
+            input_mbps=1,
+            output_mbps=2,
+            active_connections=1,
+            active_streams=1,
+            source="prometheus",
+        )
+    )
+    session.commit()
+
+    monkeypatch.setattr(
+        servers_api.DatabasePrometheusInfrastructureAdapter,
+        "probe_server",
+        lambda self, target, **kwargs: HostProbe(
+            external_id=target.external_id,
+            instance="node.example.internal:9100",
+            reachable=True,
+            up_value=1,
+            latency_ms=12.5,
+        ),
+    )
+
+    response = client.get(f"/api/v1/servers/{server.id}/diagnose")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["prometheus"]["message"] == "Prometheus OK"
+    assert body["node_exporter"]["message"] == "Node Exporter OK"
+    assert body["latency_ms"] == 12.5
+    assert "diagnostic-secret" not in response.text
+
+
+def test_server_diagnose_explains_missing_configuration(client, session):
+    """Un servidor sin Prometheus no se presenta como conectado."""
+    server = Server(external_id="srv-no-source", name="No source", role=ServerRole.OTHER)
+    session.add(server)
+    session.commit()
+
+    response = client.get(f"/api/v1/servers/{server.id}/diagnose")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "not_configured"
+    assert body["prometheus"]["status"] == "not_configured"
+    assert body["node_exporter"]["status"] == "not_configured"
+
+
+def test_server_diagnose_persists_real_inventory_idempotently(monkeypatch, client, session):
+    """El primer diagnóstico guarda un snapshot y reintentos no duplican."""
+    server = Server(
+        external_id="srv-inventory",
+        name="Inventory",
+        hostname="inventory.example.internal",
+        provider="Example Cloud",
+        datacenter="SCL-1",
+        role=ServerRole.LIVE,
+        network_interface="ens18",
+        prometheus_url="https://prometheus.internal",
+        prometheus_token="must-not-be-returned",
+    )
+    session.add(server)
+    session.commit()
+    captured_at = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(
+        servers_api.DatabasePrometheusInfrastructureAdapter,
+        "probe_server",
+        lambda self, target, **kwargs: HostProbe(
+            external_id=target.external_id,
+            instance="inventory.example.internal:9100",
+            reachable=True,
+            up_value=1,
+            latency_ms=8.5,
+            node_exporter_version="1.8.2",
+            last_scrape_at=captured_at,
+            inventory={
+                "hostname": "inventory-node",
+                "architecture": "x86_64",
+                "interfaces": [{"name": "ens18", "operstate": "up"}],
+            },
+        ),
+    )
+
+    first = client.get(f"/api/v1/servers/{server.id}/diagnose")
+    second = client.get(f"/api/v1/servers/{server.id}/diagnose")
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["firewall"]["status"] == "ok"
+    assert first.json()["node_exporter_version"] == "1.8.2"
+    assert "must-not-be-returned" not in first.text
+    snapshot = client.get(f"/api/v1/servers/{server.id}/inventory")
+    assert snapshot.status_code == 200
+    assert snapshot.json()["inventory"]["network_interface"] == "ens18"
+    assert snapshot.json()["node_exporter_version"] == "1.8.2"
+
+
+@pytest.mark.parametrize(
+    ("reachable", "up_value", "expected_status"),
+    [(False, None, "error"), (True, 0, "error"), (True, None, "no_data")],
+)
+def test_server_diagnose_reports_failure_states(
+    monkeypatch, client, session, reachable, up_value, expected_status
+):
+    """Desconexión, firewall/exporter caído y ausencia de datos son explícitos."""
+    server = Server(
+        external_id=f"srv-failure-{expected_status}-{up_value}",
+        name="Failure state",
+        hostname="failure.example.internal",
+        role=ServerRole.LIVE,
+        prometheus_url="https://prometheus.internal",
+    )
+    session.add(server)
+    session.commit()
+    monkeypatch.setattr(
+        servers_api.DatabasePrometheusInfrastructureAdapter,
+        "probe_server",
+        lambda self, target, **kwargs: HostProbe(
+            external_id=target.external_id,
+            instance="failure.example.internal:9100",
+            reachable=reachable,
+            up_value=up_value,
+            latency_ms=10.0,
+        ),
+    )
+
+    response = client.get(f"/api/v1/servers/{server.id}/diagnose")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == expected_status
+    assert body["errors"]
+    if up_value == 0:
+        assert body["firewall"]["status"] == "error"
+
+
+def test_server_diagnose_reports_missing_network_interface(monkeypatch, client, session):
+    """Un exporter sin interfaces no se presenta como completamente operativo."""
+    server = Server(
+        external_id="srv-no-interface",
+        name="No interface",
+        hostname="no-interface.example.internal",
+        role=ServerRole.LIVE,
+        prometheus_url="https://prometheus.internal",
+    )
+    session.add(server)
+    session.commit()
+    monkeypatch.setattr(
+        servers_api.DatabasePrometheusInfrastructureAdapter,
+        "probe_server",
+        lambda self, target, **kwargs: HostProbe(
+            external_id=target.external_id,
+            instance="no-interface.example.internal:9100",
+            reachable=True,
+            up_value=1,
+            inventory={"interfaces": []},
+        ),
+    )
+
+    response = client.get(f"/api/v1/servers/{server.id}/diagnose")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+    assert "interface" in response.json()["errors"][0].lower()

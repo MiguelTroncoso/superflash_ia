@@ -21,6 +21,7 @@ Seguridad:
 
 import logging
 import math
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -57,9 +58,17 @@ class PrometheusAuthError(PrometheusSourceError):
     """Prometheus rechazó las credenciales (401/403)."""
 
 
-def build_queries(instance: str) -> dict[str, str]:
+def _network_selector(instance: str, network_interface: str | None) -> str:
+    selector = f'instance="{instance}"'
+    if network_interface:
+        selector += f',device="{network_interface}"'
+    return selector
+
+
+def build_queries(instance: str, network_interface: str | None = None) -> dict[str, str]:
     """Consultas PromQL de node_exporter para una instancia del inventario."""
-    i = f'instance="{instance}"'
+    i = _network_selector(instance, network_interface)
+    network_filter = "" if network_interface else f",{_NIC_FILTER}"
     return {
         "up": f"max(up{{{i}}})",
         "cpu_percent": (f'100 * (1 - avg(rate(node_cpu_seconds_total{{mode="idle",{i}}}[5m])))'),
@@ -79,10 +88,10 @@ def build_queries(instance: str) -> dict[str, str]:
             f"100 * (1 - (node_memory_SwapFree_bytes{{{i}}} / node_memory_SwapTotal_bytes{{{i}}}))"
         ),
         "input_mbps": (
-            f"sum(rate(node_network_receive_bytes_total{{{i},{_NIC_FILTER}}}[5m])) * 8 / 1000000"
+            f"sum(rate(node_network_receive_bytes_total{{{i}{network_filter}}}[5m])) * 8 / 1000000"
         ),
         "output_mbps": (
-            f"sum(rate(node_network_transmit_bytes_total{{{i},{_NIC_FILTER}}}[5m])) * 8 / 1000000"
+            f"sum(rate(node_network_transmit_bytes_total{{{i}{network_filter}}}[5m])) * 8 / 1000000"
         ),
         "io_read_mbps": (
             f"sum(rate(node_disk_read_bytes_total{{{i},{_DISK_FILTER}}}[5m])) * 8 / 1000000"
@@ -97,6 +106,30 @@ def build_queries(instance: str) -> dict[str, str]:
     }
 
 
+def build_discovery_queries(instance: str) -> dict[str, str]:
+    """Consultas opcionales para descubrir el inventario de Node Exporter.
+
+    Se mantienen separadas de ``build_queries`` porque solo se ejecutan al
+    registrar/diagnosticar un servidor. La recolección periódica no hace
+    fan-out adicional ni depende de que una métrica de inventario exista.
+    """
+    # Discovery always enumerates all physical interfaces so the operator can
+    # choose one later; manual selection applies only to RX/TX collection.
+    i = f'instance="{instance}"'
+    return {
+        "last_scrape_at": f"timestamp(up{{{i}}})",
+        "node_exporter_build": f"node_exporter_build_info{{{i}}}",
+        "node_uname": f"node_uname_info{{{i}}}",
+        "cpu_info": f"node_cpu_info{{{i}}}",
+        "memory_total_bytes": f"node_memory_MemTotal_bytes{{{i}}}",
+        "swap_total_bytes": f"node_memory_SwapTotal_bytes{{{i}}}",
+        "filesystem": f"node_filesystem_size_bytes{{{i},{_FS_FILTER}}}",
+        "network_interfaces": f"node_network_info{{{i},{_NIC_FILTER}}}",
+        "network_speed_bytes": f"node_network_speed_bytes{{{i},{_NIC_FILTER}}}",
+        "boot_time_seconds": f"node_boot_time_seconds{{{i}}}",
+    }
+
+
 @dataclass
 class HostProbe:
     """Resultado de diagnóstico para un host del inventario."""
@@ -107,6 +140,10 @@ class HostProbe:
     up_value: float | None
     metrics: dict[str, float | None] = field(default_factory=dict)
     error: str | None = None
+    latency_ms: float | None = None
+    node_exporter_version: str | None = None
+    last_scrape_at: datetime | None = None
+    inventory: dict[str, object] | None = None
 
 
 def _clamp_percent(value: float) -> float:
@@ -191,11 +228,160 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
             return None
         return value
 
+    def _query_series(self, client: httpx.Client, promql: str) -> list[dict[str, object]]:
+        """Ejecuta una consulta vectorial y conserva solo labels públicos."""
+        response = client.get(_QUERY_PATH, params={"query": promql})
+        if response.status_code in (401, 403):
+            raise PrometheusAuthError(
+                f"Prometheus rechazó las credenciales (HTTP {response.status_code})"
+            )
+        if response.status_code != 200:
+            raise PrometheusSourceError(
+                f"Prometheus respondió HTTP {response.status_code} a una consulta"
+            )
+        try:
+            payload = response.json()
+            if payload.get("status") != "success":
+                raise PrometheusSourceError("Prometheus devolvió status != success")
+            results = payload["data"]["result"]
+        except (KeyError, TypeError) as error:
+            raise PrometheusSourceError(
+                f"Respuesta de Prometheus malformada: {type(error).__name__}"
+            ) from error
+
+        series: list[dict[str, object]] = []
+        for result in results:
+            try:
+                value = float(result["value"][1])
+                labels = result.get("metric", {})
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
+                raise PrometheusSourceError(
+                    f"Respuesta de Prometheus malformada: {type(error).__name__}"
+                ) from error
+            if not math.isfinite(value):
+                continue
+            series.append(
+                {
+                    "value": value,
+                    "labels": dict(labels) if isinstance(labels, dict) else {},
+                }
+            )
+        return series
+
+    def _discover_inventory(
+        self,
+        client: httpx.Client,
+        server: InventoryServer,
+        metrics: dict[str, float | None],
+    ) -> tuple[dict[str, object], str | None, datetime | None]:
+        """Descubre atributos del host sin convertirlos en métricas operativas."""
+        queries = build_discovery_queries(server.node_exporter_instance)
+        series: dict[str, list[dict[str, object]]] = {}
+        errors: list[str] = []
+        for name, promql in queries.items():
+            try:
+                series[name] = self._query_series(client, promql)
+            except PrometheusAuthError:
+                raise
+            except (httpx.HTTPError, PrometheusSourceError):
+                # La conectividad y las métricas esenciales ya fueron
+                # verificadas. Un exporter antiguo puede no tener una serie
+                # opcional; se conserva el snapshot con datos parciales.
+                errors.append(name)
+
+        def labels_of(name: str) -> list[dict[str, str]]:
+            labels: list[dict[str, str]] = []
+            for row in series.get(name, []):
+                value = row.get("labels", {})
+                if isinstance(value, dict):
+                    labels.append({str(key): str(item) for key, item in value.items()})
+            return labels
+
+        def value_of(name: str) -> float | None:
+            rows = series.get(name, [])
+            if not rows:
+                return None
+            value = rows[0].get("value")
+            return float(value) if isinstance(value, (int, float)) else None
+
+        uname = labels_of("node_uname")
+        uname_labels = uname[0] if uname else {}
+        cpu = labels_of("cpu_info")
+        cpu_models = [item.get("model_name") for item in cpu if item.get("model_name")]
+        cpu_cores = {item.get("core") for item in cpu if item.get("core")}
+
+        disks: list[dict[str, object]] = []
+        for row in series.get("filesystem", []):
+            labels = row.get("labels", {})
+            value = row.get("value")
+            if not isinstance(labels, dict) or not isinstance(value, (int, float)):
+                continue
+            disks.append(
+                {
+                    "device": labels.get("device"),
+                    "mountpoint": labels.get("mountpoint"),
+                    "filesystem": labels.get("fstype"),
+                    "capacity_bytes": round(float(value), 2),
+                }
+            )
+
+        speed_by_device: dict[str, float] = {}
+        for row in series.get("network_speed_bytes", []):
+            labels = row.get("labels", {})
+            value = row.get("value")
+            if isinstance(labels, dict) and isinstance(value, (int, float)):
+                device = labels.get("device")
+                if isinstance(device, str):
+                    speed_by_device[device] = round(float(value) * 8 / 1_000_000, 2)
+
+        interfaces: list[dict[str, object]] = []
+        for labels in labels_of("network_interfaces"):
+            device = labels.get("device")
+            if device:
+                interfaces.append(
+                    {
+                        "name": device,
+                        "operstate": labels.get("operstate"),
+                        "speed_mbps": speed_by_device.get(device),
+                    }
+                )
+
+        boot_time = value_of("boot_time_seconds")
+        last_scrape = value_of("last_scrape_at")
+        boot_time_at = _as_datetime(boot_time)
+        inventory: dict[str, object] = {
+            "discovery": "prometheus_node_exporter",
+            "hostname": uname_labels.get("nodename"),
+            "architecture": uname_labels.get("machine"),
+            "os": uname_labels.get("sysname"),
+            "os_version": uname_labels.get("version"),
+            "kernel": uname_labels.get("release"),
+            "virtualization": uname_labels.get("virtualization"),
+            "cpu": {
+                "model": cpu_models[0] if cpu_models else None,
+                "cores": len(cpu_cores) or None,
+                "threads": len(cpu) or None,
+            },
+            "memory_total_bytes": value_of("memory_total_bytes"),
+            "swap_total_bytes": value_of("swap_total_bytes"),
+            "disks": disks,
+            "interfaces": interfaces,
+            "uptime_seconds": metrics.get("uptime_seconds"),
+            "boot_time_at": boot_time_at.isoformat() if boot_time_at else None,
+        }
+        if errors:
+            inventory["discovery_errors"] = errors
+        return (
+            inventory,
+            _version_from_series(series.get("node_exporter_build", [])),
+            _as_datetime(last_scrape),
+        )
+
     def _collect_host(
         self, client: httpx.Client, server: InventoryServer, collected_at: datetime
     ) -> InfrastructureMetricSnapshot | None:
         """Consulta y normaliza las métricas de un host del inventario."""
-        queries = build_queries(server.node_exporter_instance)
+        queries = build_queries(server.node_exporter_instance, server.network_interface)
         up_value = self._query_value(client, queries.pop("up"))
         if up_value is not None and up_value < 1:
             logger.warning(
@@ -247,6 +433,7 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
             load_average_15m=_optional("load_average_15m"),
             uptime_seconds=int(uptime) if uptime is not None and uptime >= 0 else None,
             status=ServerStatus.ONLINE if up_value is not None else ServerStatus.UNKNOWN,
+            source="prometheus",
         )
 
     def get_servers(self) -> list[ServerSnapshot]:
@@ -285,7 +472,7 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
             raise PrometheusSourceError(f"ningún host respondió; fallos: {'; '.join(failures)}")
         return snapshots
 
-    def probe(self) -> list[HostProbe]:
+    def probe(self, *, include_inventory: bool = False) -> list[HostProbe]:
         """Diagnóstico por host: qué métricas entrega cada consulta.
 
         No escribe en la base de datos; solo realiza las mismas
@@ -294,7 +481,8 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
         probes: list[HostProbe] = []
         with self._client() as client:
             for server in self._inventory.servers:
-                queries = build_queries(server.node_exporter_instance)
+                started = time.perf_counter()
+                queries = build_queries(server.node_exporter_instance, server.network_interface)
                 probe = HostProbe(
                     external_id=server.external_id,
                     instance=server.node_exporter_instance,
@@ -305,6 +493,17 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
                     probe.up_value = self._query_value(client, queries.pop("up"))
                     for name, promql in queries.items():
                         probe.metrics[name] = self._query_value(client, promql)
+                    if include_inventory:
+                        (
+                            probe.inventory,
+                            probe.node_exporter_version,
+                            probe.last_scrape_at,
+                        ) = self._discover_inventory(client, server, probe.metrics)
+                    if server.network_interface and (
+                        probe.metrics.get("input_mbps") is None
+                        or probe.metrics.get("output_mbps") is None
+                    ):
+                        probe.error = "interfaz_no_encontrada"
                 except PrometheusAuthError as error:
                     probe.reachable = False
                     probe.error = str(error)
@@ -314,6 +513,7 @@ class PrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
                     # endpoint; el diagnóstico expone únicamente la clase.
                     probe.error = type(error).__name__
                 probes.append(probe)
+                probe.latency_ms = round((time.perf_counter() - started) * 1000, 2)
         return probes
 
 
@@ -322,6 +522,18 @@ def _node_exporter_instance(hostname: str) -> str:
     if ":" in hostname or hostname.startswith("["):
         return hostname
     return f"{hostname}:9100"
+
+
+def _server_snapshot(server: Server) -> ServerSnapshot:
+    """Convierte un registro administrado al contrato del adapter."""
+    return ServerSnapshot(
+        external_id=server.external_id,
+        name=server.name,
+        hostname=server.hostname,
+        role=server.role or ServerRole.OTHER,
+        network_capacity_mbps=server.network_capacity_mbps,
+        enabled=server.enabled,
+    )
 
 
 class DatabasePrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
@@ -340,29 +552,21 @@ class DatabasePrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
         verify_tls: bool = True,
         transport: httpx.BaseTransport | None = None,
         now_fn: Callable[[], datetime] | None = None,
+        fallback: InfrastructureMetricsAdapter | None = None,
     ) -> None:
         self._servers = tuple(server for server in servers if server.enabled)
         self._timeout_seconds = timeout_seconds
         self._verify_tls = verify_tls
         self._transport = transport
         self._now_fn = now_fn
+        self._fallback = fallback
 
     @property
     def source_name(self) -> str:
         return "prometheus"
 
     def get_servers(self) -> list[ServerSnapshot]:
-        return [
-            ServerSnapshot(
-                external_id=server.external_id,
-                name=server.name,
-                hostname=server.hostname,
-                role=server.role,
-                network_capacity_mbps=server.network_capacity_mbps,
-                enabled=server.enabled,
-            )
-            for server in self._servers
-        ]
+        return [_server_snapshot(server) for server in self._servers]
 
     def get_infrastructure_metrics(self) -> list[InfrastructureMetricSnapshot]:
         groups: dict[tuple[str, str | None], list[Server]] = {}
@@ -384,6 +588,7 @@ class DatabasePrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
                         role=server.role or ServerRole.OTHER,
                         network_capacity_mbps=server.network_capacity_mbps,
                         node_exporter_instance=_node_exporter_instance(server.hostname or ""),
+                        network_interface=server.network_interface,
                         enabled=server.enabled,
                     )
                     for server in servers
@@ -404,6 +609,73 @@ class DatabasePrometheusInfrastructureAdapter(InfrastructureMetricsAdapter):
                 failures.append(f"{len(servers)} targets: {type(error).__name__}")
                 logger.warning("fallo en grupo Prometheus de %d targets", len(servers))
 
+        if self._fallback is not None:
+            configured_ids = {
+                server.external_id
+                for server in self._servers
+                if server.prometheus_url and server.hostname
+            }
+            snapshots.extend(
+                metric
+                for metric in self._fallback.get_infrastructure_metrics()
+                if metric.server_external_id not in configured_ids
+            )
+
         if groups and not snapshots and failures:
             raise PrometheusSourceError("ningún target administrado respondió")
         return snapshots
+
+    def probe_server(self, server: Server, *, include_inventory: bool = False) -> HostProbe:
+        """Prueba un target administrado sin ejecutar acciones externas."""
+        if not server.prometheus_url or not server.hostname:
+            return HostProbe(
+                external_id=server.external_id,
+                instance=_node_exporter_instance(server.hostname or "unknown"),
+                reachable=False,
+                up_value=None,
+                error="configuracion_incompleta",
+            )
+        inventory = Inventory(
+            servers=[
+                InventoryServer(
+                    external_id=server.external_id,
+                    name=server.name,
+                    hostname=server.hostname,
+                    role=server.role or ServerRole.OTHER,
+                    network_capacity_mbps=server.network_capacity_mbps,
+                    node_exporter_instance=_node_exporter_instance(server.hostname),
+                    network_interface=server.network_interface,
+                )
+            ]
+        )
+        adapter = PrometheusInfrastructureAdapter(
+            base_url=server.prometheus_url,
+            inventory=inventory,
+            timeout_seconds=self._timeout_seconds,
+            bearer_token=server.prometheus_token,
+            verify_tls=self._verify_tls,
+            transport=self._transport,
+            now_fn=self._now_fn,
+        )
+        return adapter.probe(include_inventory=include_inventory)[0]
+
+
+def _as_datetime(value: float | None) -> datetime | None:
+    """Convierte timestamps de Prometheus sin propagar valores inválidos."""
+    if value is None or value < 0:
+        return None
+    try:
+        return datetime.fromtimestamp(value, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _version_from_series(series: list[dict[str, object]]) -> str | None:
+    """Extrae la etiqueta version sin persistir labels sensibles."""
+    for row in series:
+        labels = row.get("labels", {})
+        if isinstance(labels, dict):
+            version = labels.get("version")
+            if isinstance(version, str) and version:
+                return version[:80]
+    return None

@@ -1,6 +1,7 @@
 """Esquemas de respuesta para servidores y sus métricas."""
 
 from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -21,7 +22,14 @@ class ServerFields(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=50)
     type: str | None = Field(default=None, max_length=80)
     country: str | None = Field(default=None, min_length=2, max_length=2)
+    network_interface: str | None = Field(
+        default=None, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$"
+    )
     network_speed_mbps: float | None = Field(default=None, ge=0)
+    operational_network_limit_mbps: float | None = Field(default=None, ge=0)
+    recommended_network_limit_mbps: float | None = Field(default=None, ge=0)
+    minimum_network_reserve_mbps: float | None = Field(default=None, ge=0)
+    candidate_for_replacement: bool = False
     prometheus_url: str | None = Field(default=None, max_length=500)
     prometheus_token: str | None = Field(default=None, max_length=1000)
     heartbeat_interval_seconds: int = Field(default=300, ge=30, le=86_400)
@@ -52,7 +60,14 @@ class ServerUpdate(BaseModel):
     tags: list[str] | None = Field(default=None, max_length=50)
     type: str | None = Field(default=None, max_length=80)
     country: str | None = Field(default=None, min_length=2, max_length=2)
+    network_interface: str | None = Field(
+        default=None, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$"
+    )
     network_speed_mbps: float | None = Field(default=None, ge=0)
+    operational_network_limit_mbps: float | None = Field(default=None, ge=0)
+    recommended_network_limit_mbps: float | None = Field(default=None, ge=0)
+    minimum_network_reserve_mbps: float | None = Field(default=None, ge=0)
+    candidate_for_replacement: bool | None = None
     prometheus_url: str | None = Field(default=None, max_length=500)
     prometheus_token: str | None = Field(default=None, max_length=1000)
     heartbeat_interval_seconds: int | None = Field(default=None, ge=30, le=86_400)
@@ -82,8 +97,13 @@ class ServerRead(BaseModel):
     tags: list[str]
     type: str | None
     country: str | None
+    network_interface: str | None
     network_capacity_mbps: float | None
     network_speed_mbps: float | None
+    operational_network_limit_mbps: float | None
+    recommended_network_limit_mbps: float | None
+    minimum_network_reserve_mbps: float | None
+    candidate_for_replacement: bool
     prometheus_configured: bool
     heartbeat_interval_seconds: int
     last_heartbeat_at: datetime | None
@@ -133,3 +153,46 @@ class ServerPage(PageMetadata):
     """Página de inventario de servidores."""
 
     items: list[ServerListItem]
+
+
+DiagnosticStatus = Literal["ok", "error", "degraded", "not_configured", "no_data"]
+
+
+class ServerDiagnosticCheck(BaseModel):
+    """Resultado seguro de una comprobación de conectividad."""
+
+    status: DiagnosticStatus
+    message: str
+
+
+class ServerDiagnosticRead(BaseModel):
+    """Diagnóstico operativo sin URLs privadas, tokens ni stack traces."""
+
+    server_id: int
+    server_name: str
+    status: DiagnosticStatus
+    prometheus: ServerDiagnosticCheck
+    node_exporter: ServerDiagnosticCheck
+    firewall: ServerDiagnosticCheck | None = None
+    last_sample_at: datetime | None = None
+    last_scrape_at: datetime | None = None
+    node_exporter_version: str | None = None
+    latency_ms: float | None = Field(default=None, ge=0)
+    inventory: dict[str, Any] | None = None
+    errors: list[str] = Field(default_factory=list)
+
+
+class ServerInventorySnapshotRead(BaseModel):
+    """Snapshot técnico descubierto sin secretos ni configuración privada."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    server_id: int
+    captured_at: datetime
+    source: str
+    node_exporter_version: str | None
+    prometheus_last_scrape_at: datetime | None
+    probe_latency_ms: float | None
+    status: str
+    inventory: dict[str, Any]

@@ -16,6 +16,8 @@ export type ApiCollectionStatus = 'running' | 'success' | 'error'
 
 export type ApiCollectionTrigger = 'manual' | 'scheduler'
 
+export type ApiDiagnosticStatus = 'ok' | 'error' | 'degraded' | 'not_configured' | 'no_data'
+
 export type ApiChannelType = 'permanent' | 'event' | 'temporary' | 'scheduled' | 'archived'
 
 export interface HealthResponse {
@@ -74,8 +76,13 @@ export interface ServerResponse {
   tags: string[]
   type: string | null
   country: string | null
+  network_interface: string | null
   network_capacity_mbps: number | null
   network_speed_mbps: number | null
+  operational_network_limit_mbps: number | null
+  recommended_network_limit_mbps: number | null
+  minimum_network_reserve_mbps: number | null
+  candidate_for_replacement: boolean
   prometheus_configured: boolean
   heartbeat_interval_seconds: number
   last_heartbeat_at: string | null
@@ -84,6 +91,55 @@ export interface ServerResponse {
   enabled: boolean
   created_at: string
   updated_at: string
+}
+
+export interface ServerWriteInput {
+  external_id: string
+  name: string
+  hostname?: string | null
+  role?: ApiServerRole
+  provider?: string | null
+  datacenter?: string | null
+  group?: string | null
+  country?: string | null
+  network_interface?: string | null
+  network_speed_mbps?: number | null
+  prometheus_url?: string | null
+  prometheus_token?: string | null
+  heartbeat_interval_seconds?: number
+  enabled?: boolean
+}
+
+export interface ServerDiagnosticCheckResponse {
+  status: ApiDiagnosticStatus
+  message: string
+}
+
+export interface ServerDiagnosticResponse {
+  server_id: number
+  server_name: string
+  status: ApiDiagnosticStatus
+  prometheus: ServerDiagnosticCheckResponse
+  node_exporter: ServerDiagnosticCheckResponse
+  firewall: ServerDiagnosticCheckResponse | null
+  last_sample_at: string | null
+  last_scrape_at: string | null
+  node_exporter_version: string | null
+  latency_ms: number | null
+  inventory: Record<string, unknown> | null
+  errors: string[]
+}
+
+export interface ServerInventorySnapshotResponse {
+  id: number
+  server_id: number
+  captured_at: string
+  source: string
+  node_exporter_version: string | null
+  prometheus_last_scrape_at: string | null
+  probe_latency_ms: number | null
+  status: string
+  inventory: Record<string, unknown>
 }
 
 export interface ServerMetricResponse {
@@ -277,4 +333,216 @@ export interface RecommendationResponse {
 export interface RecommendationsResponse {
   generated_at: string
   recommendations: RecommendationResponse[]
+}
+
+export type CapacityState = 'normal' | 'warning' | 'high' | 'critical' | 'no_data'
+export type IntelligenceDataQuality = 'observed' | 'simulated' | 'insufficient_data'
+
+export interface CapacityServerResponse {
+  server_id: number
+  name: string
+  provider: string | null
+  group: string | null
+  physical_capacity_mbps: number | null
+  operational_limit_mbps: number | null
+  recommended_limit_mbps: number | null
+  minimum_reserve_mbps: number | null
+  observed_load_mbps: number | null
+  physical_utilization_percent: number | null
+  operational_utilization_percent: number | null
+  physical_free_mbps: number | null
+  operational_free_mbps: number | null
+  safety_margin_mbps: number | null
+  state: CapacityState
+  data_quality: IntelligenceDataQuality
+  last_collected_at: string | null
+  sample_count?: number
+  average_load_mbps?: number | null
+  maximum_load_mbps?: number | null
+  p95_load_mbps?: number | null
+  p99_load_mbps?: number | null
+  headroom_mbps?: number | null
+  operational_margin_mbps?: number | null
+  free_capacity_mbps?: number | null
+}
+
+export interface CapacityOverviewResponse {
+  generated_at: string
+  server_count: number
+  configured_server_count: number
+  sampled_server_count: number
+  total_physical_capacity_mbps: number
+  total_operational_limit_mbps: number
+  total_observed_load_mbps: number
+  total_physical_free_mbps: number
+  total_operational_free_mbps: number
+  data_quality: IntelligenceDataQuality
+  missing_data: string[]
+  servers: CapacityServerResponse[]
+}
+
+export type BillingFrequency = 'monthly' | 'annual' | 'custom'
+export type PaymentStatus = 'paid' | 'pending' | 'due_soon' | 'overdue' | 'cancelled'
+
+export interface CostProfileResponse {
+  id: number
+  server_id: number
+  server_name: string
+  monthly_cost: number
+  currency: string
+  billing_frequency: BillingFrequency
+  next_payment_date: string | null
+  provider: string | null
+  auto_renew: boolean
+  payment_status: PaymentStatus
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface UpcomingPaymentResponse {
+  server_id: number
+  server_name: string
+  amount: number
+  currency: string
+  next_payment_date: string
+  payment_status: PaymentStatus
+  days_until_due: number
+  auto_renew: boolean
+}
+
+export interface CostsSummaryResponse {
+  generated_at: string
+  monthly_total: number
+  annual_projected: number
+  average_per_server: number | null
+  profiled_server_count: number
+  missing_profile_count: number
+  profiles: CostProfileResponse[]
+  upcoming: UpcomingPaymentResponse[]
+}
+
+export type LoadUnitKind =
+  | 'channel'
+  | 'stream'
+  | 'category'
+  | 'group'
+  | 'event'
+  | 'traffic_block'
+  | 'server_aggregate'
+
+export type SimulationRisk = 'low' | 'medium' | 'high' | 'insufficient_data'
+
+export interface SimulationLoadUnitInput {
+  id: string
+  load_mbps: number
+  kind?: LoadUnitKind
+  current_server_id?: number | null
+  label?: string | null
+}
+
+export interface SimulationVirtualServerInput {
+  key: string
+  name: string
+  physical_capacity_mbps: number
+  operational_limit_mbps?: number | null
+  recommended_limit_mbps?: number | null
+  minimum_reserve_mbps?: number
+  monthly_cost?: number | null
+  currency?: string
+  provider?: string | null
+}
+
+export interface SimulationRequestInput {
+  name: string
+  removed_server_ids?: number[]
+  included_server_ids?: number[] | null
+  server_overrides?: Array<{
+    server_id: number
+    physical_capacity_mbps?: number | null
+    operational_limit_mbps?: number | null
+    recommended_limit_mbps?: number | null
+    minimum_reserve_mbps?: number | null
+    monthly_cost?: number | null
+  }>
+  virtual_servers?: SimulationVirtualServerInput[]
+  load_units?: SimulationLoadUnitInput[] | null
+}
+
+export interface DistributionServerResponse {
+  key: string
+  server_id: number | null
+  name: string
+  capacity_mbps: number
+  operational_limit_mbps: number
+  recommended_limit_mbps: number
+  minimum_reserve_mbps: number
+  assigned_load_mbps: number
+  free_margin_mbps: number
+  utilization_percent: number
+  assigned_unit_count: number
+  exceeds_operational_target: boolean
+  exceeds_recommended_limit: boolean
+}
+
+export interface DistributionAssignmentResponse {
+  unit_id: string
+  server_key: string | null
+  load_mbps: number
+  assigned: boolean
+  reason: string | null
+}
+
+export interface SimulationResultResponse {
+  feasible: boolean
+  data_quality: IntelligenceDataQuality
+  risk: SimulationRisk
+  explanation: string
+  missing_data: string[]
+  servers: DistributionServerResponse[]
+  assignments: DistributionAssignmentResponse[]
+  unassigned_load_mbps: number
+  unassigned_unit_count: number
+  total_capacity_mbps: number
+  total_assignable_capacity_mbps: number
+  total_assigned_load_mbps: number
+  current_monthly_cost: number | null
+  proposed_monthly_cost: number | null
+  monthly_savings: number | null
+  annual_savings: number | null
+}
+
+export interface SimulationResponse {
+  id: number
+  name: string
+  request: SimulationRequestInput
+  result: SimulationResultResponse
+  created_at: string
+  updated_at: string
+}
+
+export interface SimulationListResponse {
+  items: SimulationResponse[]
+  total: number
+}
+
+export interface IntelligenceRecommendationResponse {
+  code: string
+  severity: ApiAlertSeverity
+  title: string
+  explanation: string
+  data_used: string[]
+  monthly_savings: number | null
+  annual_savings: number | null
+  risk: string
+  confidence: number
+  suggested_action: string
+  server_id?: number | null
+  server_name?: string | null
+}
+
+export interface IntelligenceRecommendationsResponse {
+  generated_at: string
+  data_quality: IntelligenceDataQuality
+  recommendations: IntelligenceRecommendationResponse[]
 }

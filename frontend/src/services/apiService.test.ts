@@ -93,4 +93,20 @@ describe('apiService', () => {
 
     expect(get).toHaveBeenCalledWith('/health', undefined)
   })
+
+  it('uses optimizer endpoints without browser-side secrets', async () => {
+    const get = vi.spyOn(httpClient, 'get').mockResolvedValue({ data: {} } as never)
+    const post = vi.spyOn(httpClient, 'post').mockResolvedValue({ data: { id: 1 } } as never)
+
+    await apiService.getCapacityOverview()
+    await apiService.getCostsSummary()
+    await apiService.getIntelligenceRecommendations()
+    await apiService.createSimulation({ name: 'test scenario' })
+
+    expect(get).toHaveBeenNthCalledWith(1, '/api/v1/capacity/overview', undefined)
+    expect(get).toHaveBeenNthCalledWith(2, '/api/v1/costs/summary', undefined)
+    expect(get).toHaveBeenNthCalledWith(3, '/api/v1/intelligence/recommendations', undefined)
+    expect(post).toHaveBeenCalledWith('/api/v1/simulations', { name: 'test scenario' })
+    expect(post.mock.calls[0]?.[1]).not.toEqual(expect.objectContaining({ API_KEY: expect.anything() }))
+  })
 })

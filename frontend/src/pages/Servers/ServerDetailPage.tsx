@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowLeft,
+  CheckCircle2,
   Clock3,
   HardDrive,
   HeartPulse,
@@ -56,6 +57,7 @@ export function ServerDetailPage(): React.JSX.Element {
         lastUpdatedAt={data.lastUpdatedAt}
         onRefresh={() => void data.refetch()}
       />
+      {data.diagnostic && <DiagnosticPanel diagnostic={data.diagnostic} />}
       {data.isEmpty ? (
         <DashboardState state="empty" message="This server has no collected metric samples yet. No synthetic values are shown." />
       ) : (
@@ -130,6 +132,35 @@ export function ServerDetailPage(): React.JSX.Element {
         </>
       )}
     </>
+  )
+}
+
+function DiagnosticPanel({ diagnostic }: { diagnostic: NonNullable<ReturnType<typeof useServerDetailData>['diagnostic']> }): React.JSX.Element {
+  const check = (label: string, status: string, message: string): React.JSX.Element => (
+    <div className="flex items-start gap-3 rounded-xl border border-line bg-panel-raised/40 p-4">
+      {status === 'ok' ? <CheckCircle2 className="mt-0.5 shrink-0 text-success" size={16} /> : <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={16} />}
+      <div><p className="text-xs font-semibold text-copy">{label} · {status.replace('_', ' ')}</p><p className="mt-1 text-xs text-muted">{message}</p></div>
+    </div>
+  )
+
+  return (
+    <Surface className="mb-5 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h2 className="text-sm font-semibold text-copy">Production connection</h2><p className="mt-1 text-xs text-muted">Read-only diagnostic; no external action is executed.</p></div>
+        <StatusBadge state={diagnostic.status === 'ok' ? 'healthy' : diagnostic.status === 'not_configured' ? 'warning' : 'critical'} label={diagnostic.status.replace('_', ' ')} />
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {check('Prometheus', diagnostic.prometheus.status, diagnostic.prometheus.message)}
+        {check('Node Exporter', diagnostic.node_exporter.status, diagnostic.node_exporter.message)}
+        {diagnostic.firewall && check('Firewall path', diagnostic.firewall.status, diagnostic.firewall.message)}
+      </div>
+      <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted">
+        <span>Latency: {diagnostic.latency_ms === null ? '—' : `${diagnostic.latency_ms.toFixed(1)} ms`}</span>
+        <span>Last scrape: {formatDateTime(diagnostic.last_scrape_at ?? diagnostic.last_sample_at)}</span>
+        <span>Node Exporter: {diagnostic.node_exporter_version ?? 'unknown version'}</span>
+      </div>
+      {diagnostic.errors.length > 0 && <p className="mt-3 text-xs text-warning">{diagnostic.errors.join(' · ')}</p>}
+    </Surface>
   )
 }
 
