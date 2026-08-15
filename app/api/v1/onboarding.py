@@ -13,8 +13,14 @@ from app.models.onboarding import OnboardingAuditEvent, ServerOnboarding
 from app.repositories.onboarding_repository import OnboardingRepository
 from app.repositories.server_repository import ServerRepository
 from app.schemas.onboarding import (
+    MaintenanceAction,
+    MaintenanceActionRead,
+    MaintenanceRequest,
     OnboardingAuditRead,
     OnboardingDiagnosisRead,
+    OnboardingDiscoveryRead,
+    OnboardingDiscoveryRequest,
+    OnboardingHealthRead,
     OnboardingRead,
     OnboardingRetryRequest,
     OnboardingStartRequest,
@@ -58,9 +64,24 @@ def start_onboarding(
         username=payload.ssh_username,
         password=payload.password,
         private_key=payload.private_key,
+        expected_host_key_fingerprint=payload.host_key_fingerprint,
     )
     background_tasks.add_task(OnboardingService(settings).run, onboarding.id, credentials, actor)
     return OnboardingRead.model_validate(onboarding)
+
+
+@router.post("/discover", response_model=OnboardingDiscoveryRead)
+def discover_onboarding(
+    payload: OnboardingDiscoveryRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> OnboardingDiscoveryRead:
+    """Descubre un host y exige confirmar una host key nueva antes de guardar."""
+    if not settings.onboarding_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Onboarding SSH está deshabilitado por configuración",
+        )
+    return OnboardingDiscoveryRead.model_validate(OnboardingService(settings).discover(payload))
 
 
 @router.get("/{onboarding_id}", response_model=OnboardingRead)
@@ -128,6 +149,7 @@ def retry_onboarding(
         username=onboarding.ssh_username,
         password=payload.password,
         private_key=payload.private_key,
+        expected_host_key_fingerprint=onboarding.server.ssh_host_key_fingerprint,
     )
     background_tasks.add_task(OnboardingService(settings).run, onboarding.id, credentials, actor)
     return OnboardingRead.model_validate(onboarding)
@@ -191,6 +213,7 @@ def rollback_onboarding(
         username=onboarding.ssh_username,
         password=payload.password,
         private_key=payload.private_key,
+        expected_host_key_fingerprint=onboarding.server.ssh_host_key_fingerprint,
     )
     background_tasks.add_task(
         OnboardingService(settings).rollback, onboarding.id, credentials, actor
@@ -224,10 +247,56 @@ def diagnose_onboarding(
             username=onboarding.ssh_username,
             password=payload.password,
             private_key=payload.private_key,
+            expected_host_key_fingerprint=server.ssh_host_key_fingerprint,
         ),
         _actor(operator_id),
     )
     return OnboardingDiagnosisRead.model_validate(result)
+
+
+@router.get("/{onboarding_id}/health", response_model=OnboardingHealthRead)
+def onboarding_health(
+    onboarding_id: int,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> OnboardingHealthRead:
+    try:
+        result = OnboardingService(settings).health(onboarding_id)
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from None
+    return OnboardingHealthRead.model_validate(result)
+
+
+@router.post(
+    "/server/{server_id}/maintenance/{action}",
+    response_model=MaintenanceActionRead,
+)
+def server_maintenance(
+    server_id: int,
+    action: MaintenanceAction,
+    payload: MaintenanceRequest,
+    session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    operator_id: Annotated[str | None, Header(alias="X-Operator-Id")] = None,
+) -> MaintenanceActionRead:
+    server = ServerRepository(session).get(server_id)
+    if server is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Servidor no encontrado")
+    credentials = SSHCredentials(
+        host=server.hostname or "",
+        port=server.ssh_port,
+        username=server.ssh_username or "root",
+        password=payload.password,
+        private_key=payload.private_key,
+        expected_host_key_fingerprint=server.ssh_host_key_fingerprint,
+    )
+    result = OnboardingService(settings).maintenance(
+        server_id,
+        action,
+        credentials,
+        _actor(operator_id),
+        payload.target_version,
+    )
+    return MaintenanceActionRead.model_validate(result)
 
 
 @router.get("/server/{server_id}", response_model=OnboardingRead)
