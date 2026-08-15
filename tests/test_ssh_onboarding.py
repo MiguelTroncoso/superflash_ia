@@ -100,7 +100,7 @@ def test_onboarding_contract_never_models_secrets_for_persistence() -> None:
         ip="107.150.53.26",
         ssh_username="root",
         auth_method="private_key",
-        private_key="-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----",
+        private_key="synthetic-private-key-fixture",
         host_key_fingerprint="SHA256:test-fingerprint",
     )
 
@@ -121,7 +121,7 @@ def test_provisioning_scripts_are_local_allowlisted_and_do_not_flush_firewall() 
 
 def test_onboarding_response_does_not_return_ephemeral_ssh_secret(client, monkeypatch) -> None:
     monkeypatch.setattr(OnboardingService, "run", lambda *args, **kwargs: None)
-    secret = "-----BEGIN PRIVATE KEY-----never-return-----END PRIVATE KEY-----"
+    secret = "synthetic-private-key-fixture"
 
     response = client.post(
         "/api/v1/onboarding",
