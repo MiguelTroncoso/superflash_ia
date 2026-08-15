@@ -4,7 +4,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.server import ServerOperationalStatus, ServerRole
+from app.models.server import ServerOperationalStatus, ServerProfile, ServerRole
 from app.schemas.pagination import PageMetadata
 
 
@@ -20,6 +20,7 @@ class ServerFields(BaseModel):
     group: str | None = Field(default=None, max_length=120)
     tags: list[str] = Field(default_factory=list, max_length=50)
     type: str | None = Field(default=None, max_length=80)
+    server_profile: ServerProfile = ServerProfile.REPLACEABLE
     country: str | None = Field(default=None, min_length=2, max_length=2)
     network_interface: str | None = Field(
         default=None, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$"
@@ -62,6 +63,7 @@ class ServerUpdate(BaseModel):
     group: str | None = Field(default=None, max_length=120)
     tags: list[str] | None = Field(default=None, max_length=50)
     type: str | None = Field(default=None, max_length=80)
+    server_profile: ServerProfile | None = None
     country: str | None = Field(default=None, min_length=2, max_length=2)
     network_interface: str | None = Field(
         default=None, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$"
@@ -103,6 +105,7 @@ class ServerRead(BaseModel):
     group: str | None
     tags: list[str]
     type: str | None
+    server_profile: ServerProfile
     country: str | None
     network_interface: str | None
     network_capacity_mbps: float | None

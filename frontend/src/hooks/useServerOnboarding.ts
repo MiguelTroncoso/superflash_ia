@@ -10,6 +10,8 @@ import type {
   OnboardingHealthResponse,
   OnboardingResponse,
   OnboardingStartRequest,
+  OnboardingTestSSHRequest,
+  OnboardingTestSSHResponse,
 } from '../types/api'
 
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'rollback_required'])
@@ -29,6 +31,7 @@ export function useServerOnboarding(onboardingId: number | null): {
   isFetching: boolean
   health: OnboardingHealthResponse | undefined
   discover: ReturnType<typeof useMutation<OnboardingDiscoveryResponse, Error, OnboardingDiscoveryRequest>>
+  testSSH: ReturnType<typeof useMutation<OnboardingTestSSHResponse, Error, OnboardingTestSSHRequest>>
   refetch: () => Promise<void>
   start: ReturnType<typeof useMutation<OnboardingResponse, Error, OnboardingStartRequest>>
   retry: UseMutationResult<OnboardingResponse, Error, RetryVariables, unknown>
@@ -53,6 +56,7 @@ export function useServerOnboarding(onboardingId: number | null): {
   }
   const start = useMutation({ mutationFn: apiService.startOnboarding, onSuccess: invalidate })
   const discover = useMutation({ mutationFn: apiService.discoverOnboarding })
+  const testSSH = useMutation({ mutationFn: apiService.testSSHConnection })
   const retry = useMutation({ mutationFn: ({ id, payload }: RetryVariables) => apiService.retryOnboarding(id, payload), onSuccess: invalidate })
   const cancel = useMutation({ mutationFn: () => apiService.cancelOnboarding(onboardingId as number) })
   const rollback = useMutation({ mutationFn: ({ id, payload }: RetryVariables) => apiService.rollbackOnboarding(id, payload), onSuccess: invalidate })
@@ -72,6 +76,7 @@ export function useServerOnboarding(onboardingId: number | null): {
     isFetching: query.isFetching,
     health: healthQuery.data,
     discover,
+    testSSH,
     refetch: async () => { await query.refetch() },
     start,
     retry,

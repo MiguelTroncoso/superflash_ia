@@ -35,6 +35,7 @@ class SSHOperation(StrEnum):
     CHECK_EXPORTER_VERSION = "check_exporter_version"
     SERVICE_STATUS = "service_status"
     FIREWALL_STATUS = "firewall_status"
+    CHECK_TEMP_WRITE = "check_temp_write"
 
 
 _OPERATION_COMMANDS: dict[SSHOperation, str] = {
@@ -95,6 +96,8 @@ _OPERATION_COMMANDS: dict[SSHOperation, str] = {
         "if command -v iptables >/dev/null 2>&1; then iptables -S INPUT 2>/dev/null | "
         "grep -E '9100|superflash-node-exporter' || true; fi"
     ),
+    # Permission check only: this never creates or removes a remote file.
+    SSHOperation.CHECK_TEMP_WRITE: "test -w /tmp",
 }
 
 _ALLOWED_SCRIPTS = frozenset(
@@ -191,11 +194,19 @@ class RemoteInventory:
 class SSHServiceError(RuntimeError):
     """Error seguro con código estable, sin detalles de credenciales/host key."""
 
-    def __init__(self, code: str, message: str, *, fingerprint: str | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        fingerprint: str | None = None,
+        probable_cause: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.fingerprint = fingerprint
+        self.probable_cause = probable_cause
 
 
 def parse_inventory_output(output: str) -> RemoteInventory:
@@ -303,12 +314,14 @@ class SSHSession:
         job_token: str,
         username: str,
         host_key_fingerprint: str | None = None,
+        host_key_status: str = "unknown",
     ) -> None:
         self._client = client
         self._settings = settings
         self._job_token = job_token
         self._username = username
         self.host_key_fingerprint = host_key_fingerprint
+        self.host_key_status = host_key_status
 
     def run(
         self,
@@ -419,23 +432,27 @@ class FingerprintHostKeyPolicy(paramiko.MissingHostKeyPolicy):
     def __init__(self, expected_fingerprint: str | None) -> None:
         self.expected_fingerprint = expected_fingerprint
         self.fingerprint: str | None = None
+        self.status = "unknown"
 
     def missing_host_key(self, client: Any, hostname: str, key: Any) -> None:
         fingerprint = ssh_key_fingerprint(key)
         self.fingerprint = fingerprint
         if not self.expected_fingerprint:
+            self.status = "new"
             raise SSHServiceError(
                 "host_key_new",
                 "Se requiere confirmar la huella de la host key SSH.",
                 fingerprint=fingerprint,
             )
         if not _fingerprints_equal(self.expected_fingerprint, fingerprint):
+            self.status = "changed"
             raise SSHServiceError(
                 "host_key_changed",
                 "La host key SSH no coincide con la huella confirmada.",
                 fingerprint=fingerprint,
             )
         client.get_host_keys().add(hostname, key.get_name(), key)
+        self.status = "confirmed"
 
 
 def ssh_key_fingerprint(key: Any) -> str:
@@ -451,6 +468,95 @@ def private_key_fingerprint(private_key: str) -> str:
 
 def _fingerprints_equal(left: str, right: str) -> bool:
     return left.strip().removeprefix("SHA256:") == right.strip().removeprefix("SHA256:")
+
+
+def _known_host_key_matches(client: Any, hostname: str, port: int, key: Any) -> bool:
+    """Checks whether the connected key was already present in host-key files."""
+    expected = ssh_key_fingerprint(key)
+    hostnames = (hostname, f"[{hostname}]:{port}")
+    for candidate in hostnames:
+        entries = client.get_host_keys().lookup(candidate) or {}
+        if any(
+            _fingerprints_equal(expected, ssh_key_fingerprint(item)) for item in entries.values()
+        ):
+            return True
+    return False
+
+
+def _looks_like_authentication_failure(error: Exception) -> bool:
+    text = str(error).lower()
+    return any(
+        marker in text
+        for marker in (
+            "authentication",
+            "auth method",
+            "no existing session",
+            "publickey",
+            "password",
+        )
+    )
+
+
+def _classify_authentication_error(
+    error: Exception, credentials: SSHCredentials
+) -> tuple[str, str, str]:
+    text = str(error).lower()
+    if any(marker in text for marker in ("unknown user", "invalid user", "user not found")):
+        return (
+            "ssh_user_not_found",
+            "El usuario SSH no existe en el servidor.",
+            "Verifica el nombre de usuario y que la cuenta esté habilitada para SSH.",
+        )
+    if "root login" in text or "root logins" in text:
+        return (
+            "root_login_disabled",
+            "El acceso SSH directo de root está deshabilitado.",
+            "Usa un usuario con sudo para continuar de forma segura.",
+        )
+    if "public key required" in text or "publickey required" in text:
+        return (
+            "public_key_required",
+            "El servidor requiere autenticación por clave pública.",
+            "Selecciona una clave privada autorizada para el usuario SSH.",
+        )
+    if isinstance(error, paramiko.BadAuthenticationType) or "publickey" in text:
+        return (
+            "password_authentication_disabled",
+            "La autenticación por contraseña está deshabilitada; usa una clave privada.",
+            "El servidor SSH anuncia únicamente autenticación por clave pública.",
+        )
+    if credentials.password:
+        return (
+            "wrong_password",
+            "La contraseña SSH no fue aceptada.",
+            "Verifica la contraseña temporal y que el usuario permita acceso SSH.",
+        )
+    return (
+        "permission_denied",
+        "El acceso SSH fue denegado.",
+        "Verifica la clave, el usuario y sus permisos de acceso.",
+    )
+
+
+def _classify_connection_error(error: Exception | None) -> tuple[str, str, str]:
+    text = str(error).lower() if error else ""
+    if isinstance(error, TimeoutError) or "timed out" in text or "timeout" in text:
+        return (
+            "ssh_timeout",
+            "La conexión SSH agotó el tiempo de espera.",
+            "Verifica el puerto 22, la latencia y las reglas de firewall.",
+        )
+    if "refused" in text or "connection reset" in text:
+        return (
+            "firewall_blocked",
+            "La conexión SSH fue rechazada por el servidor o firewall.",
+            "Verifica que SSH escuche en el puerto indicado y permite la IP del monitor.",
+        )
+    return (
+        "host_unreachable",
+        "El servidor no es alcanzable por SSH.",
+        "Verifica la IP, el enrutamiento y las reglas de firewall.",
+    )
 
 
 def exporter_version_from_output(output: str) -> str | None:
@@ -511,6 +617,7 @@ class SSHConnectionService:
                     kwargs["password"] = credentials.password
                 client.connect(**kwargs)
                 remote_fingerprint = policy.fingerprint or credentials.expected_host_key_fingerprint
+                remote_key = None
                 if remote_fingerprint is None:
                     try:
                         transport = client.get_transport()
@@ -520,27 +627,53 @@ class SSHConnectionService:
                         remote_fingerprint = ssh_key_fingerprint(remote_key)
                     except (AttributeError, TypeError, paramiko.SSHException):
                         remote_fingerprint = None
+                else:
+                    try:
+                        transport = client.get_transport()
+                        remote_key = transport.get_remote_server_key() if transport else None
+                    except (AttributeError, TypeError, paramiko.SSHException):
+                        remote_key = None
+                host_key_status = policy.status
+                if host_key_status == "unknown":
+                    host_key_status = (
+                        "already_trusted"
+                        if remote_key is not None
+                        and _known_host_key_matches(
+                            client, credentials.host, credentials.port, remote_key
+                        )
+                        else "confirmed"
+                    )
                 return SSHSession(
                     client,
                     self._settings,
                     job_token,
                     credentials.username,
                     remote_fingerprint,
+                    host_key_status,
                 )
             except SSHServiceError:
                 client.close()
                 raise
             except paramiko.AuthenticationException as error:
                 client.close()
-                raise SSHServiceError(
-                    "authentication_failed", "La autenticación SSH fue rechazada"
-                ) from error
+                code, message, cause = _classify_authentication_error(error, credentials)
+                raise SSHServiceError(code, message, probable_cause=cause) from error
             except paramiko.BadHostKeyException as error:
                 client.close()
+                received_key = getattr(error, "got_key", None)
+                received_fingerprint = (
+                    ssh_key_fingerprint(received_key) if received_key is not None else None
+                )
                 raise SSHServiceError(
-                    "host_key_changed", "La host key SSH no coincide con la registrada"
+                    "host_key_changed",
+                    "La host key SSH no coincide con la registrada",
+                    fingerprint=received_fingerprint,
                 ) from error
             except paramiko.ssh_exception.SSHException as error:
+                if _looks_like_authentication_failure(error):
+                    client.close()
+                    code, message, cause = _classify_authentication_error(error, credentials)
+                    raise SSHServiceError(code, message, probable_cause=cause) from error
                 last_error = error
                 client.close()
             except (OSError, TimeoutError) as error:
@@ -548,9 +681,8 @@ class SSHConnectionService:
                 client.close()
             if attempt < self._settings.ssh_retry_count:
                 continue
-        raise SSHServiceError(
-            "connection_failed", "No se pudo conectar por SSH al servidor"
-        ) from last_error
+        code, message, cause = _classify_connection_error(last_error)
+        raise SSHServiceError(code, message, probable_cause=cause) from last_error
 
     def _configure_host_keys(
         self, client: Any, expected_fingerprint: str | None

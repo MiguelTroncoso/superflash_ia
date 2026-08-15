@@ -24,6 +24,8 @@ from app.schemas.onboarding import (
     OnboardingRead,
     OnboardingRetryRequest,
     OnboardingStartRequest,
+    OnboardingTestSSHRead,
+    OnboardingTestSSHRequest,
 )
 from app.services.onboarding_service import TERMINAL_STATUSES, OnboardingService
 from app.services.ssh_service import SSHCredentials
@@ -82,6 +84,20 @@ def discover_onboarding(
             detail="Onboarding SSH está deshabilitado por configuración",
         )
     return OnboardingDiscoveryRead.model_validate(OnboardingService(settings).discover(payload))
+
+
+@router.post("/test-ssh", response_model=OnboardingTestSSHRead)
+def test_ssh_connection(
+    payload: OnboardingTestSSHRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> OnboardingTestSSHRead:
+    """Read-only SSH preflight; it never installs or changes the target host."""
+    if not settings.onboarding_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Onboarding SSH está deshabilitado por configuración",
+        )
+    return OnboardingTestSSHRead.model_validate(OnboardingService(settings).test_ssh(payload))
 
 
 @router.get("/{onboarding_id}", response_model=OnboardingRead)

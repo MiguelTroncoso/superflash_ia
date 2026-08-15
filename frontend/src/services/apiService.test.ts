@@ -106,6 +106,15 @@ describe('apiService', () => {
       private_key: 'ephemeral-key',
       confirm_host_key: false,
     })
+    await apiService.testSSHConnection({
+      host: 'server.example',
+      port: 22,
+      username: 'root',
+      auth_method: 'password',
+      password: 'ephemeral-password',
+      host_key_fingerprint: 'SHA256:test-fingerprint',
+      confirm_host_key: true,
+    })
     await apiService.getOnboardingHealth(12)
     await apiService.maintenance(12, 'repair', {
       auth_method: 'private_key',
@@ -114,7 +123,8 @@ describe('apiService', () => {
 
     expect(post).toHaveBeenNthCalledWith(1, '/api/v1/onboarding/discover', expect.anything())
     expect(get).toHaveBeenCalledWith('/api/v1/onboarding/12/health', undefined)
-    expect(post).toHaveBeenNthCalledWith(2, '/api/v1/onboarding/server/12/maintenance/repair', expect.anything())
+    expect(post).toHaveBeenNthCalledWith(2, '/api/v1/onboarding/test-ssh', expect.anything())
+    expect(post).toHaveBeenNthCalledWith(3, '/api/v1/onboarding/server/12/maintenance/repair', expect.anything())
     expect(post.mock.calls[0]?.[1]).not.toHaveProperty('api_key')
   })
 
