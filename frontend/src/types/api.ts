@@ -77,6 +77,13 @@ export interface ServerResponse {
   network_capacity_mbps: number | null
   network_speed_mbps: number | null
   prometheus_configured: boolean
+  ssh_host_key_fingerprint?: string | null
+  ssh_management_configured?: boolean
+  ssh_management_key_fingerprint?: string | null
+  ssh_management_key_created_at?: string | null
+  ssh_management_key_rotated_at?: string | null
+  node_exporter_status?: string
+  node_exporter_version?: string | null
   heartbeat_interval_seconds: number
   last_heartbeat_at: string | null
   status: 'online' | 'degraded' | 'offline' | 'unknown' | 'maintenance'
@@ -339,11 +346,70 @@ export interface OnboardingDiagnosisResponse {
   errors: string[]
 }
 
+export interface OnboardingDiscoveryRequest {
+  host: string
+  port: number
+  username: string
+  auth_method: OnboardingAuthMethod
+  password?: string
+  private_key?: string
+  host_key_fingerprint?: string
+  confirm_host_key?: boolean
+}
+
+export interface OnboardingDiscoveryResponse {
+  reachable: boolean
+  authentication_ok: boolean
+  privilege_ok: boolean
+  discovered_inventory: Record<string, unknown> | null
+  host_key_fingerprint: string | null
+  host_key_status: string
+  detected_firewall: string
+  detected_interface: string | null
+  link_speed_mbps: number | null
+  exporter_status: string
+  exporter_version: string | null
+  port_9100_status: string
+  systemd_available: boolean
+  warnings: string[]
+  blocking_errors: string[]
+}
+
+export interface OnboardingHealthResponse {
+  onboarding_status: string
+  ssh: string
+  privilege: string
+  node_exporter: string
+  exporter_version: string | null
+  firewall: string
+  prometheus: string
+  inventory: string
+  network_interface: string | null
+  metrics_available: boolean
+  last_scrape: string | null
+  scrape_age_seconds: number | null
+  freshness: string
+  latency_ms: number | null
+  overall_status: string
+}
+
+export type MaintenanceAction = 'diagnose' | 'repair' | 'update' | 'reinstall'
+
+export interface MaintenanceResponse {
+  action: MaintenanceAction
+  status: string
+  message: string
+  exporter_status: string
+  exporter_version: string | null
+}
+
 export interface OnboardingStartRequest {
   name: string
   ip: string
   ssh_port: number
   ssh_username: string
+  host_key_fingerprint: string
+  network_interface?: string
   auth_method: OnboardingAuthMethod
   password?: string
   private_key?: string
