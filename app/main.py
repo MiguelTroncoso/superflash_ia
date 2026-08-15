@@ -56,9 +56,9 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version=settings.app_version,
         description=(
-            "Plataforma privada de monitoreo de solo lectura. "
-            "La versión actual utiliza únicamente datos simulados y no "
-            "modifica ninguna infraestructura externa."
+            "Plataforma privada de monitoreo. Las métricas son de solo lectura; "
+            "el onboarding SSH es explícito, catalogado y limitado a componentes "
+            "gestionados por SuperFlash."
         ),
         lifespan=lifespan,
     )

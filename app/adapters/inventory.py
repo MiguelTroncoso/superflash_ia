@@ -29,6 +29,9 @@ class InventoryServer(BaseModel):
     hostname: str | None = None
     role: ServerRole = ServerRole.OTHER
     network_capacity_mbps: float | None = Field(default=None, ge=0)
+    network_interface: str | None = Field(
+        default=None, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$"
+    )
     # Valor de la etiqueta "instance" en Prometheus (host:puerto). El
     # patrón impide caracteres con significado en PromQL (comillas, llaves).
     node_exporter_instance: str = Field(pattern=r"^[A-Za-z0-9._\-\[\]:]+$", max_length=253)
