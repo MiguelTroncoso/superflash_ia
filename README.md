@@ -179,12 +179,15 @@ overview y el endpoint de estado.
 | GET  | `/api/v1/collection/status` | Estado persistido del recolector y del scheduler |
 | GET  | `/api/v1/alerts` | Alertas internas según las últimas muestras |
 | GET  | `/api/v1/overview` | Estadísticas agregadas actuales |
+| POST | `/api/v1/onboarding/discover` | Descubrimiento SSH read-only sin persistencia |
 | POST | `/api/v1/onboarding` | Inicia preparación SSH controlada |
 | GET  | `/api/v1/onboarding/{id}` | Estado persistido del onboarding |
+| GET  | `/api/v1/onboarding/{id}/health` | Salud consolidada sin credenciales |
 | GET  | `/api/v1/onboarding/{id}/audit` | Auditoría sanitizada del onboarding |
 | POST | `/api/v1/onboarding/{id}/retry` | Reintenta con credencial efímera |
 | POST | `/api/v1/onboarding/{id}/cancel` | Solicita cancelación segura |
 | POST | `/api/v1/onboarding/{id}/rollback` | Retira solo componentes gestionados |
+| POST | `/api/v1/onboarding/server/{id}/maintenance/{action}` | Diagnóstico o mantenimiento del exporter mediante catálogo cerrado |
 
 ### Autenticación
 
