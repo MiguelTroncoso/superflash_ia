@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     ssh_retry_count: int = Field(default=2, ge=0, le=5)
     onboarding_monitor_ip: str = "178.104.98.19"
     node_exporter_version: str | None = None
+    node_exporter_primary_base_url: str = (
+        "https://github.com/prometheus/node_exporter/releases/download"
+    )
+    node_exporter_mirror_base_url: str | None = None
+    node_exporter_allowed_sha256: str | None = None
+    ssh_management_private_key_file: str | None = None
     onboarding_enabled: bool = True
 
     # Clave requerida por TODOS los endpoints /api/v1 (cabecera X-API-Key).

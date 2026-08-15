@@ -115,6 +115,13 @@ class ServerRead(BaseModel):
     next_payment_date: date | None
     auto_renew: bool
     contract_status: str
+    ssh_host_key_fingerprint: str | None
+    ssh_management_configured: bool
+    ssh_management_key_fingerprint: str | None
+    ssh_management_key_created_at: datetime | None
+    ssh_management_key_rotated_at: datetime | None
+    node_exporter_status: str
+    node_exporter_version: str | None
     prometheus_configured: bool
     heartbeat_interval_seconds: int
     last_heartbeat_at: datetime | None

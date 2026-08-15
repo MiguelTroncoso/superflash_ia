@@ -7,6 +7,7 @@ import re
 import secrets
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from time import monotonic
 
 from sqlalchemy import desc, select
@@ -20,7 +21,12 @@ from app.models.onboarding import OnboardingAuditEvent, ServerInventorySnapshot,
 from app.models.server import Server, ServerMetric, ServerOperationalStatus, ServerRole
 from app.repositories.onboarding_repository import OnboardingRepository
 from app.repositories.server_repository import ServerRepository
-from app.schemas.onboarding import OnboardingStartRequest, OnboardingStatus
+from app.schemas.onboarding import (
+    MaintenanceAction,
+    OnboardingDiscoveryRequest,
+    OnboardingStartRequest,
+    OnboardingStatus,
+)
 from app.services.ssh_service import (
     RemoteInventory,
     SSHConnectionService,
@@ -28,7 +34,10 @@ from app.services.ssh_service import (
     SSHOperation,
     SSHServiceError,
     SSHSession,
+    detect_firewall,
+    exporter_version_from_output,
     parse_inventory_output,
+    private_key_fingerprint,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +64,8 @@ STEP_PROGRESS: dict[str, tuple[str, int]] = {
 SAFE_ERRORS: dict[str, str] = {
     "authentication_failed": "La autenticación SSH fue rechazada.",
     "host_key_invalid": "La host key SSH no coincide con la registrada.",
+    "host_key_new": "Se requiere confirmar la huella de la host key SSH.",
+    "host_key_changed": "La host key SSH cambió y fue bloqueada.",
     "connection_failed": "No se pudo conectar por SSH al servidor.",
     "command_failed": "Falló una comprobación remota controlada.",
     "requirements_missing": "El servidor no cumple los requisitos de provisioning.",
@@ -69,6 +80,8 @@ SAFE_ERRORS: dict[str, str] = {
     "cancelled": "Onboarding cancelado por el operador.",
     "rollback_failed": "Rollback incompleto; revisar el diagnóstico del servidor.",
     "internal_error": "Onboarding detenido por un error interno seguro.",
+    "invalid_private_key": "La clave privada SSH no es válida.",
+    "maintenance_failed": "La acción administrada no pudo validarse.",
 }
 
 
@@ -122,6 +135,7 @@ class OnboardingService:
                 "contract_status": "pending_onboarding",
                 "ssh_port": payload.ssh_port,
                 "ssh_username": payload.ssh_username,
+                "ssh_host_key_fingerprint": payload.host_key_fingerprint,
                 "prometheus_url": payload.prometheus_url or settings.prometheus_url,
                 "prometheus_active": True,
                 "status": ServerOperationalStatus.UNKNOWN,
@@ -250,6 +264,26 @@ class OnboardingService:
             self._transition(session, onboarding, "validating", actor, True)
             server.enabled = True
             server.status = ServerOperationalStatus.ONLINE
+            server.ssh_host_key_fingerprint = (
+                ssh.host_key_fingerprint or server.ssh_host_key_fingerprint
+            )
+            management_key_path = self._settings.ssh_management_private_key_file
+            if management_key_path and Path(management_key_path).is_file():
+                key_text = Path(management_key_path).read_text(encoding="utf-8")
+                management_fingerprint = private_key_fingerprint(key_text)
+                server.ssh_management_configured = True
+                if server.ssh_management_key_fingerprint != management_fingerprint:
+                    server.ssh_management_key_rotated_at = (
+                        datetime.now(UTC) if server.ssh_management_key_fingerprint else None
+                    )
+                    server.ssh_management_key_fingerprint = management_fingerprint
+                if server.ssh_management_key_created_at is None:
+                    server.ssh_management_key_created_at = datetime.fromtimestamp(
+                        Path(management_key_path).stat().st_mtime, tz=UTC
+                    )
+            server.node_exporter_status = "running"
+            version_output = ssh.run(SSHOperation.CHECK_EXPORTER_VERSION)
+            server.node_exporter_version = exporter_version_from_output(version_output.stdout)
             server.contract_status = "active"
             server.last_heartbeat_at = datetime.now(UTC)
             onboarding.status = OnboardingStatus.COMPLETED.value
@@ -290,6 +324,339 @@ class OnboardingService:
                 actor,
                 rollback=installed,
             )
+        finally:
+            if ssh is not None:
+                ssh.close()
+            session.close()
+
+    def discover(self, payload: OnboardingDiscoveryRequest) -> dict[str, object]:
+        """Descubre un host sin crear registros ni ejecutar cambios remotos."""
+        credentials = SSHCredentials(
+            host=payload.host,
+            port=payload.port,
+            username=payload.username,
+            password=payload.password,
+            private_key=payload.private_key,
+            expected_host_key_fingerprint=(
+                payload.host_key_fingerprint if payload.confirm_host_key else None
+            ),
+        )
+        result: dict[str, object] = {
+            "reachable": False,
+            "authentication_ok": False,
+            "privilege_ok": False,
+            "discovered_inventory": None,
+            "host_key_fingerprint": payload.host_key_fingerprint,
+            "host_key_status": "unknown",
+            "detected_firewall": "unknown",
+            "detected_interface": None,
+            "link_speed_mbps": None,
+            "exporter_status": "unknown",
+            "exporter_version": None,
+            "port_9100_status": "unknown",
+            "systemd_available": False,
+            "warnings": [],
+            "blocking_errors": [],
+        }
+        warnings = result["warnings"]
+        blocking_errors = result["blocking_errors"]
+        assert isinstance(warnings, list)
+        assert isinstance(blocking_errors, list)
+        ssh: SSHSession | None = None
+        try:
+            ssh = self._connection_factory(self._settings).connect(
+                credentials, secrets.token_hex(8)
+            )
+            result["reachable"] = True
+            result["authentication_ok"] = True
+            result["host_key_status"] = "confirmed"
+            result["host_key_fingerprint"] = ssh.host_key_fingerprint
+
+            requirements = ssh.run(SSHOperation.CHECK_REQUIREMENTS)
+            result["systemd_available"] = "systemd=ok" in requirements.stdout
+            if "port_9100=occupied" in requirements.stdout:
+                result["port_9100_status"] = "occupied"
+            elif "port_9100=free" in requirements.stdout:
+                result["port_9100_status"] = "free"
+            else:
+                result["port_9100_status"] = "unknown"
+            required_tools = ("systemctl", "curl", "tar", "sha256sum", "ss", "ip")
+            missing_tools = [
+                tool for tool in required_tools if f"{tool}=missing" in requirements.stdout
+            ]
+            if not requirements.ok or missing_tools or not result["systemd_available"]:
+                blocking_errors.append("REQUIREMENTS_MISSING")
+            if result["port_9100_status"] == "occupied":
+                exporter_probe = ssh.run(SSHOperation.CHECK_EXPORTER)
+                if not exporter_probe.ok:
+                    blocking_errors.append("PORT_9100_OCCUPIED")
+
+            privilege = ssh.run(SSHOperation.CHECK_SUDO)
+            if privilege.ok and privilege.stdout.strip() == "0":
+                result["privilege_ok"] = True
+            else:
+                privilege = ssh.run(
+                    SSHOperation.CHECK_SUDO,
+                    as_root=True,
+                    sudo_password=payload.password,
+                )
+                result["privilege_ok"] = privilege.ok and privilege.stdout.strip() == "0"
+            if not result["privilege_ok"]:
+                blocking_errors.append("PRIVILEGE_REQUIRED")
+
+            raw_inventory = ssh.run(SSHOperation.DETECT_INVENTORY)
+            inventory = parse_inventory_output(raw_inventory.stdout) if raw_inventory.ok else None
+            if inventory is None or inventory.hostname == "unknown" or not inventory.interfaces:
+                blocking_errors.append("INVENTORY_UNAVAILABLE")
+            else:
+                result["discovered_inventory"] = inventory.payload()
+                result["detected_interface"] = inventory.primary_interface
+                result["link_speed_mbps"] = _interface_speed(inventory, inventory.primary_interface)
+
+            exporter = ssh.run(SSHOperation.CHECK_EXPORTER)
+            version_output = ssh.run(SSHOperation.CHECK_EXPORTER_VERSION)
+            result["exporter_status"] = "healthy" if exporter.ok else "not_healthy"
+            result["exporter_version"] = exporter_version_from_output(version_output.stdout)
+            if not exporter.ok:
+                warnings.append("NODE_EXPORTER_NOT_HEALTHY")
+
+            firewall = ssh.run(
+                SSHOperation.FIREWALL_STATUS,
+                as_root=True,
+                sudo_password=payload.password,
+            )
+            firewall_status = detect_firewall(firewall.stdout, self._settings.onboarding_monitor_ip)
+            result["detected_firewall"] = firewall_status
+            if firewall_status in {"unknown", "not_configured", "exposed", "partial"}:
+                warnings.append("FIREWALL_REVIEW_REQUIRED")
+            if inventory is not None and not inventory.primary_interface:
+                warnings.append("PRIMARY_INTERFACE_NOT_DETECTED")
+            return result
+        except SSHServiceError as error:
+            if error.code in {"host_key_new", "host_key_changed"}:
+                result["reachable"] = True
+                result["host_key_status"] = "new" if error.code == "host_key_new" else "changed"
+                result["host_key_fingerprint"] = error.fingerprint
+                blocking_errors.append(
+                    "HOST_KEY_CONFIRMATION_REQUIRED"
+                    if error.code == "host_key_new"
+                    else "HOST_KEY_CHANGED"
+                )
+            elif error.code == "authentication_failed":
+                result["reachable"] = True
+                result["host_key_status"] = "confirmed"
+                blocking_errors.append("AUTHENTICATION_FAILED")
+            elif error.code == "invalid_private_key":
+                blocking_errors.append("INVALID_PRIVATE_KEY")
+            else:
+                blocking_errors.append(error.code.upper())
+            return result
+        finally:
+            if ssh is not None:
+                ssh.close()
+
+    def health(self, onboarding_id: int) -> dict[str, object]:
+        """Devuelve salud consolidada sin volver a pedir una contraseña."""
+        session = get_session_factory()()
+        try:
+            onboarding = OnboardingRepository(session).get(onboarding_id)
+            if onboarding is None:
+                raise ValueError("Onboarding no encontrado")
+            server = ServerRepository(session).get(onboarding.server_id)
+            if server is None:
+                raise ValueError("Servidor no encontrado")
+            snapshot = session.scalar(
+                select(ServerInventorySnapshot)
+                .where(ServerInventorySnapshot.server_id == server.id)
+                .order_by(desc(ServerInventorySnapshot.captured_at))
+                .limit(1)
+            )
+            latest_metric = session.scalar(
+                select(ServerMetric)
+                .where(ServerMetric.server_id == server.id)
+                .order_by(desc(ServerMetric.collected_at))
+                .limit(1)
+            )
+            now = datetime.now(UTC)
+            last_scrape = latest_metric.collected_at if latest_metric else None
+            if last_scrape is not None and last_scrape.tzinfo is None:
+                last_scrape = last_scrape.replace(tzinfo=UTC)
+            age = int((now - last_scrape).total_seconds()) if last_scrape else None
+            freshness = (
+                "fresh"
+                if age is not None and age <= server.heartbeat_interval_seconds * 2
+                else "stale"
+            )
+            metrics_available = latest_metric is not None
+            prometheus = "configured" if server.prometheus_configured else "not_configured"
+            ssh = "configured" if server.ssh_host_key_fingerprint else "unknown"
+            node_exporter = server.node_exporter_status or "unknown"
+            completed = onboarding.status == OnboardingStatus.COMPLETED.value
+            provisioning = onboarding.status in {
+                item.value
+                for item in OnboardingStatus
+                if item
+                not in {
+                    OnboardingStatus.COMPLETED,
+                    OnboardingStatus.FAILED,
+                    OnboardingStatus.CANCELLED,
+                    OnboardingStatus.ROLLBACK_REQUIRED,
+                }
+            }
+            if completed:
+                overall = "healthy" if metrics_available and freshness == "fresh" else "degraded"
+            elif provisioning:
+                overall = "provisioning"
+            elif onboarding.status == OnboardingStatus.FAILED.value:
+                overall = "failed"
+            else:
+                overall = "unknown"
+            return {
+                "onboarding_status": onboarding.status,
+                "ssh": ssh,
+                "privilege": "configured" if completed else "unknown",
+                "node_exporter": node_exporter,
+                "exporter_version": server.node_exporter_version,
+                "firewall": "configured" if completed else "unknown",
+                "prometheus": prometheus,
+                "inventory": "available" if snapshot is not None else "missing",
+                "network_interface": server.network_interface,
+                "metrics_available": metrics_available,
+                "last_scrape": last_scrape,
+                "scrape_age_seconds": age,
+                "freshness": freshness,
+                "latency_ms": None,
+                "overall_status": overall,
+            }
+        finally:
+            session.close()
+
+    def maintenance(
+        self,
+        server_id: int,
+        action: MaintenanceAction,
+        credentials: SSHCredentials,
+        actor: str,
+        target_version: str | None = None,
+    ) -> dict[str, object]:
+        """Ejecuta solo acciones del catálogo sobre componentes administrados."""
+        session = get_session_factory()()
+        ssh: SSHSession | None = None
+        result: dict[str, object] = {
+            "action": action.value,
+            "status": "failed",
+            "message": SAFE_ERRORS["maintenance_failed"],
+            "exporter_status": "unknown",
+            "exporter_version": None,
+        }
+        try:
+            server = ServerRepository(session).get(server_id)
+            if server is None or not server.hostname:
+                result["message"] = "Servidor sin endpoint SSH configurado."
+                return result
+            expected = server.ssh_host_key_fingerprint
+            ssh = self._connection_factory(self._settings).connect(
+                SSHCredentials(
+                    host=server.hostname,
+                    port=server.ssh_port,
+                    username=server.ssh_username or credentials.username,
+                    password=credentials.password,
+                    private_key=credentials.private_key,
+                    expected_host_key_fingerprint=expected,
+                ),
+                secrets.token_hex(8),
+            )
+            if action is MaintenanceAction.DIAGNOSE:
+                exporter = ssh.run(SSHOperation.CHECK_EXPORTER)
+                firewall = ssh.run(
+                    SSHOperation.FIREWALL_STATUS,
+                    as_root=True,
+                    sudo_password=credentials.password,
+                )
+                result["exporter_status"] = "healthy" if exporter.ok else "not_healthy"
+                result["status"] = "ok"
+                result["message"] = "Diagnóstico completado sin ejecutar cambios."
+                result["exporter_version"] = exporter_version_from_output(
+                    ssh.run(SSHOperation.CHECK_EXPORTER_VERSION).stdout
+                )
+                result["message"] = (
+                    result["message"]
+                    if detect_firewall(firewall.stdout, self._settings.onboarding_monitor_ip)
+                    in {"restricted", "partial"}
+                    else "Diagnóstico completado; revisar la configuración del firewall."
+                )
+            else:
+                version = target_version or self._settings.node_exporter_version
+                if action is MaintenanceAction.UPDATE and not version:
+                    raise SSHServiceError(
+                        "target_version_not_configured",
+                        "La versión objetivo no está configurada.",
+                    )
+                common_env = {
+                    "MONITOR_IP": self._settings.onboarding_monitor_ip,
+                    "NODE_EXPORTER_VERSION": version or "",
+                    "NODE_EXPORTER_PRIMARY_BASE_URL": self._settings.node_exporter_primary_base_url,
+                    "NODE_EXPORTER_MIRROR_BASE_URL": (
+                        self._settings.node_exporter_mirror_base_url or ""
+                    ),
+                    "NODE_EXPORTER_ALLOWED_SHA256": (
+                        self._settings.node_exporter_allowed_sha256 or ""
+                    ),
+                    "SKIP_FIREWALL": "1",
+                }
+                script_name = {
+                    MaintenanceAction.REPAIR: "repair-node-exporter.sh",
+                    MaintenanceAction.UPDATE: "update-node-exporter.sh",
+                    MaintenanceAction.REINSTALL: "install-node-exporter.sh",
+                }[action]
+                operation = ssh.run_script(
+                    script_name, environment=common_env, sudo_password=credentials.password
+                )
+                if not operation.ok:
+                    raise SSHServiceError("maintenance_failed", SAFE_ERRORS["maintenance_failed"])
+                firewall = ssh.run_script(
+                    "configure-node-exporter-firewall.sh",
+                    environment={"MONITOR_IP": self._settings.onboarding_monitor_ip},
+                    sudo_password=credentials.password,
+                )
+                if not firewall.ok:
+                    raise SSHServiceError("firewall_failed", SAFE_ERRORS["firewall_failed"])
+                exporter = ssh.run(SSHOperation.CHECK_EXPORTER)
+                if not exporter.ok:
+                    raise SSHServiceError("exporter_unhealthy", SAFE_ERRORS["exporter_unhealthy"])
+                result["exporter_status"] = "healthy"
+                result["exporter_version"] = exporter_version_from_output(
+                    ssh.run(SSHOperation.CHECK_EXPORTER_VERSION).stdout
+                )
+                result["status"] = "ok"
+                result["message"] = "Acción administrada completada y validada."
+                server.node_exporter_status = "running"
+                exporter_version = result["exporter_version"]
+                server.node_exporter_version = (
+                    exporter_version if isinstance(exporter_version, str) else None
+                )
+                server.ssh_host_key_fingerprint = (
+                    ssh.host_key_fingerprint or server.ssh_host_key_fingerprint
+                )
+            onboarding = OnboardingRepository(session).latest_for_server(server_id)
+            if onboarding is not None:
+                OnboardingRepository(session).add_audit(
+                    OnboardingAuditEvent(
+                        onboarding_id=onboarding.id,
+                        server_id=server.id,
+                        actor=actor,
+                        event=f"maintenance_{action.value}",
+                        step="maintenance",
+                        success=True,
+                        detail_sanitized=str(result["message"]),
+                        created_at=datetime.now(UTC),
+                    )
+                )
+            session.commit()
+            return result
+        except SSHServiceError as error:
+            result["message"] = SAFE_ERRORS.get(error.code, SAFE_ERRORS["maintenance_failed"])
+            return result
         finally:
             if ssh is not None:
                 ssh.close()
@@ -638,3 +1005,13 @@ def _network_is_valid(interface: str | None, inventory: RemoteInventory) -> bool
     if interface:
         return interface in {str(item.get("name")) for item in inventory.interfaces}
     return bool(inventory.primary_interface or inventory.interfaces)
+
+
+def _interface_speed(inventory: RemoteInventory, interface: str | None) -> int | None:
+    if interface is None:
+        return None
+    for item in inventory.interfaces:
+        if item.get("name") == interface:
+            value = item.get("speed_mbps")
+            return value if isinstance(value, int) else None
+    return None

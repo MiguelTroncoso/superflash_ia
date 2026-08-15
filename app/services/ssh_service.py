@@ -7,10 +7,12 @@ subirse están en ``_ALLOWED_SCRIPTS``.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
 import logging
+import re
 import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -42,6 +44,8 @@ _OPERATION_COMMANDS: dict[SSHOperation, str] = {
         "printf 'hostname=%s\\n' \"$(hostname)\"; "
         "printf 'os=%s\\n' \"$(. /etc/os-release 2>/dev/null; printf '%s %s' "
         '"${PRETTY_NAME:-unknown}" "${VERSION_ID:-}")"; '
+        "printf 'os_version=%s\\n' \"$(. /etc/os-release 2>/dev/null; "
+        'printf \'%s\' "${VERSION_ID:-unknown}")"; '
         "printf 'arch=%s\\n' \"$(uname -m)\"; "
         "printf 'kernel=%s\\n' \"$(uname -r)\"; "
         "printf 'ip_addresses=%s\\n' \"$(hostname -I 2>/dev/null | tr ' ' ',' | sed 's/,$//')\"; "
@@ -78,7 +82,8 @@ _OPERATION_COMMANDS: dict[SSHOperation, str] = {
         "http://127.0.0.1:9100/metrics | grep -q '^# HELP'"
     ),
     SSHOperation.CHECK_EXPORTER_VERSION: (
-        "node_exporter --version 2>/dev/null | head -n 1 || true"
+        "(/usr/local/bin/node_exporter --version 2>/dev/null || "
+        "node_exporter --version 2>/dev/null || true) | head -n 1"
     ),
     SSHOperation.SERVICE_STATUS: (
         "set +e; printf 'active=%s\\n' \"$(systemctl is-active node_exporter 2>/dev/null || true)\"; "  # noqa: E501
@@ -97,6 +102,7 @@ _ALLOWED_SCRIPTS = frozenset(
         "install-node-exporter.sh",
         "update-node-exporter.sh",
         "remove-node-exporter.sh",
+        "repair-node-exporter.sh",
         "configure-node-exporter-firewall.sh",
         "install-superflash-agent.sh",
         "update-superflash-agent.sh",
@@ -112,6 +118,7 @@ class SSHCredentials:
     username: str
     password: str | None = None
     private_key: str | None = None
+    expected_host_key_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +137,7 @@ class SSHCommandResult:
 class RemoteInventory:
     hostname: str = "unknown"
     os: str = "unknown"
+    os_version: str = "unknown"
     arch: str = "unknown"
     kernel: str = "unknown"
     ip_addresses: list[str] = field(default_factory=list)
@@ -151,6 +159,7 @@ class RemoteInventory:
         return {
             "hostname": self.hostname,
             "os": self.os,
+            "os_version": self.os_version,
             "arch": self.arch,
             "kernel": self.kernel,
             "ip_addresses": self.ip_addresses,
@@ -182,10 +191,11 @@ class RemoteInventory:
 class SSHServiceError(RuntimeError):
     """Error seguro con código estable, sin detalles de credenciales/host key."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, fingerprint: str | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.fingerprint = fingerprint
 
 
 def parse_inventory_output(output: str) -> RemoteInventory:
@@ -213,6 +223,7 @@ def parse_inventory_output(output: str) -> RemoteInventory:
     return RemoteInventory(
         hostname=values.get("hostname", "unknown") or "unknown",
         os=values.get("os", "unknown") or "unknown",
+        os_version=values.get("os_version", "unknown") or "unknown",
         arch=values.get("arch", "unknown") or "unknown",
         kernel=values.get("kernel", "unknown") or "unknown",
         ip_addresses=addresses,
@@ -285,11 +296,19 @@ def _parse_disks(raw_disks: str) -> list[dict[str, str | int | None]]:
 class SSHSession:
     """Sesión autenticada con ejecución limitada al catálogo."""
 
-    def __init__(self, client: Any, settings: Settings, job_token: str, username: str) -> None:
+    def __init__(
+        self,
+        client: Any,
+        settings: Settings,
+        job_token: str,
+        username: str,
+        host_key_fingerprint: str | None = None,
+    ) -> None:
         self._client = client
         self._settings = settings
         self._job_token = job_token
         self._username = username
+        self.host_key_fingerprint = host_key_fingerprint
 
     def run(
         self,
@@ -344,7 +363,15 @@ class SSHSession:
                 f"{key}={shlex.quote(value)}"
                 for key, value in (environment or {}).items()
                 if key
-                in {"MONITOR_IP", "NODE_EXPORTER_VERSION", "SKIP_FIREWALL", "FIREWALL_ACTION"}
+                in {
+                    "MONITOR_IP",
+                    "NODE_EXPORTER_VERSION",
+                    "NODE_EXPORTER_PRIMARY_BASE_URL",
+                    "NODE_EXPORTER_MIRROR_BASE_URL",
+                    "NODE_EXPORTER_ALLOWED_SHA256",
+                    "SKIP_FIREWALL",
+                    "FIREWALL_ACTION",
+                }
             )
             command = f"{env} bash {shlex.quote(remote_path)}".strip()
             if as_root and self._username != "root":
@@ -386,6 +413,69 @@ def _truncate(value: str, limit: int = 8_000) -> str:
     return value[:limit]
 
 
+class FingerprintHostKeyPolicy(paramiko.MissingHostKeyPolicy):
+    """Acepta una host key nueva únicamente con confirmación explícita."""
+
+    def __init__(self, expected_fingerprint: str | None) -> None:
+        self.expected_fingerprint = expected_fingerprint
+        self.fingerprint: str | None = None
+
+    def missing_host_key(self, client: Any, hostname: str, key: Any) -> None:
+        fingerprint = ssh_key_fingerprint(key)
+        self.fingerprint = fingerprint
+        if not self.expected_fingerprint:
+            raise SSHServiceError(
+                "host_key_new",
+                "Se requiere confirmar la huella de la host key SSH.",
+                fingerprint=fingerprint,
+            )
+        if not _fingerprints_equal(self.expected_fingerprint, fingerprint):
+            raise SSHServiceError(
+                "host_key_changed",
+                "La host key SSH no coincide con la huella confirmada.",
+                fingerprint=fingerprint,
+            )
+        client.get_host_keys().add(hostname, key.get_name(), key)
+
+
+def ssh_key_fingerprint(key: Any) -> str:
+    """Calcula una huella OpenSSH SHA256 sin registrar material de la clave."""
+    digest = hashlib.sha256(key.asbytes()).digest()
+    return f"SHA256:{base64.b64encode(digest).decode('ascii').rstrip('=')}"
+
+
+def private_key_fingerprint(private_key: str) -> str:
+    """Calcula solo la huella de una clave privada mantenida en memoria."""
+    return ssh_key_fingerprint(_parse_private_key(private_key))
+
+
+def _fingerprints_equal(left: str, right: str) -> bool:
+    return left.strip().removeprefix("SHA256:") == right.strip().removeprefix("SHA256:")
+
+
+def exporter_version_from_output(output: str) -> str | None:
+    match = re.search(r"node_exporter(?:,)? version (v?[0-9]+(?:\.[0-9]+){1,3})", output)
+    return match.group(1) if match else None
+
+
+def detect_firewall(output: str, monitor_ip: str) -> str:
+    """Clasifica únicamente reglas visibles, sin exponer su contenido al cliente."""
+    normalized = output.lower()
+    if not output.strip():
+        return "unknown"
+    has_managed_allow = monitor_ip in output and "9100" in output
+    has_managed_deny = "superflash-node-exporter" in normalized and (
+        "deny" in normalized or "drop" in normalized
+    )
+    if has_managed_allow and has_managed_deny:
+        return "restricted"
+    if has_managed_allow:
+        return "partial"
+    if "9100" in output:
+        return "exposed"
+    return "not_configured"
+
+
 class SSHConnectionService:
     """Conecta con host-key validation, timeout y retries acotados."""
 
@@ -402,7 +492,9 @@ class SSHConnectionService:
         for attempt in range(self._settings.ssh_retry_count + 1):
             client = self._client_factory()
             try:
-                self._configure_host_keys(client)
+                policy = self._configure_host_keys(
+                    client, credentials.expected_host_key_fingerprint
+                )
                 kwargs: dict[str, Any] = {
                     "hostname": credentials.host,
                     "port": credentials.port,
@@ -418,7 +510,26 @@ class SSHConnectionService:
                 else:
                     kwargs["password"] = credentials.password
                 client.connect(**kwargs)
-                return SSHSession(client, self._settings, job_token, credentials.username)
+                remote_fingerprint = policy.fingerprint or credentials.expected_host_key_fingerprint
+                if remote_fingerprint is None:
+                    try:
+                        transport = client.get_transport()
+                        if transport is None:
+                            raise AttributeError("SSH transport unavailable")
+                        remote_key = transport.get_remote_server_key()
+                        remote_fingerprint = ssh_key_fingerprint(remote_key)
+                    except (AttributeError, TypeError, paramiko.SSHException):
+                        remote_fingerprint = None
+                return SSHSession(
+                    client,
+                    self._settings,
+                    job_token,
+                    credentials.username,
+                    remote_fingerprint,
+                )
+            except SSHServiceError:
+                client.close()
+                raise
             except paramiko.AuthenticationException as error:
                 client.close()
                 raise SSHServiceError(
@@ -427,7 +538,7 @@ class SSHConnectionService:
             except paramiko.BadHostKeyException as error:
                 client.close()
                 raise SSHServiceError(
-                    "host_key_invalid", "La host key SSH no coincide con la registrada"
+                    "host_key_changed", "La host key SSH no coincide con la registrada"
                 ) from error
             except paramiko.ssh_exception.SSHException as error:
                 last_error = error
@@ -441,12 +552,16 @@ class SSHConnectionService:
             "connection_failed", "No se pudo conectar por SSH al servidor"
         ) from last_error
 
-    def _configure_host_keys(self, client: Any) -> None:
+    def _configure_host_keys(
+        self, client: Any, expected_fingerprint: str | None
+    ) -> FingerprintHostKeyPolicy:
         client.load_system_host_keys()
         known_hosts = Path(self._settings.ssh_known_hosts_file)
         if known_hosts.is_file():
             client.load_host_keys(str(known_hosts))
-        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        policy = FingerprintHostKeyPolicy(expected_fingerprint)
+        client.set_missing_host_key_policy(policy)
+        return policy
 
 
 def _parse_private_key(private_key: str) -> Any:

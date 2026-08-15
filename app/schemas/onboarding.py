@@ -61,6 +61,79 @@ class OnboardingCredentials(BaseModel):
         return self
 
 
+class OnboardingDiscoveryRequest(OnboardingCredentials):
+    """Discovery efímero; no crea ni modifica un servidor."""
+
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=22, ge=1, le=65_535)
+    username: str = Field(min_length=1, max_length=120)
+    host_key_fingerprint: str | None = Field(default=None, max_length=100)
+    confirm_host_key: bool = False
+
+
+class OnboardingDiscoveryRead(BaseModel):
+    """Resultado sanitizado de auto discovery."""
+
+    reachable: bool
+    authentication_ok: bool
+    privilege_ok: bool
+    discovered_inventory: dict[str, object] | None
+    host_key_fingerprint: str | None
+    host_key_status: str
+    detected_firewall: str
+    detected_interface: str | None
+    link_speed_mbps: int | None
+    exporter_status: str
+    exporter_version: str | None
+    port_9100_status: str
+    systemd_available: bool
+    warnings: list[str]
+    blocking_errors: list[str]
+
+
+class OnboardingHealthRead(BaseModel):
+    """Estado consolidado sin requerir reingresar una contraseña temporal."""
+
+    onboarding_status: str
+    ssh: str
+    privilege: str
+    node_exporter: str
+    exporter_version: str | None
+    firewall: str
+    prometheus: str
+    inventory: str
+    network_interface: str | None
+    metrics_available: bool
+    last_scrape: datetime | None
+    scrape_age_seconds: int | None
+    freshness: str
+    latency_ms: float | None
+    overall_status: str
+
+
+class MaintenanceAction(enum.StrEnum):
+    DIAGNOSE = "diagnose"
+    REPAIR = "repair"
+    UPDATE = "update"
+    REINSTALL = "reinstall"
+
+
+class MaintenanceActionRead(BaseModel):
+    action: MaintenanceAction
+    status: str
+    message: str
+    exporter_status: str
+    exporter_version: str | None
+
+
+class MaintenanceRequest(OnboardingCredentials):
+    """Credencial efímera y versión cerrada para una acción administrada."""
+
+    target_version: str | None = Field(
+        default=None, min_length=1, max_length=20, pattern=r"^v?[0-9]+(?:\.[0-9]+){1,3}$"
+    )
+
+
 class OnboardingStartRequest(OnboardingCredentials):
     """Datos de inventario y acceso para iniciar un onboarding."""
 
@@ -69,6 +142,7 @@ class OnboardingStartRequest(OnboardingCredentials):
     ip: str = Field(min_length=1, max_length=255)
     ssh_port: int = Field(default=22, ge=1, le=65_535)
     ssh_username: str = Field(min_length=1, max_length=120)
+    host_key_fingerprint: str = Field(min_length=8, max_length=100)
     prometheus_url: str | None = Field(default=None, max_length=500)
     role: str = Field(default="other", max_length=20)
     provider: str | None = Field(default=None, max_length=120)
