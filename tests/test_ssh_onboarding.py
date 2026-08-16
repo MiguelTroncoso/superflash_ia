@@ -15,6 +15,7 @@ from app.services.ssh_service import (
     SSHCommandResult,
     SSHOperation,
     SSHServiceError,
+    SSHSession,
     detect_firewall,
     exporter_version_from_output,
     parse_inventory_output,
@@ -271,3 +272,40 @@ def test_test_ssh_endpoint_never_returns_ephemeral_password(client, monkeypatch)
 
     assert response.status_code == 200
     assert secret not in response.text
+
+
+def test_ssh_command_has_a_bounded_wait_for_remote_exit() -> None:
+    class HangingChannel:
+        def exit_status_ready(self) -> bool:
+            return False
+
+        def recv_ready(self) -> bool:
+            return False
+
+        def recv_stderr_ready(self) -> bool:
+            return False
+
+        def recv_exit_status(self) -> int:
+            return 0
+
+    channel = HangingChannel()
+
+    class Stream:
+        def __init__(self) -> None:
+            self.channel = channel
+
+    class FakeClient:
+        def exec_command(self, *_args, **_kwargs):
+            return object(), Stream(), Stream()
+
+    session = SSHSession(
+        FakeClient(),
+        Settings(_env_file=None, api_key="test-api-key", ssh_command_timeout_seconds=0.01),
+        "job-token",
+        "root",
+    )
+
+    with pytest.raises(SSHServiceError) as error:
+        session.run(SSHOperation.DETECT_INVENTORY)
+
+    assert error.value.code == "command_timeout"

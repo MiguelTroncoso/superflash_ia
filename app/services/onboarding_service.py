@@ -81,6 +81,7 @@ SAFE_ERRORS: dict[str, str] = {
     "host_key_changed": "La host key SSH cambió y fue bloqueada.",
     "connection_failed": "No se pudo conectar por SSH al servidor.",
     "command_failed": "Falló una comprobación remota controlada.",
+    "command_timeout": "La comprobación remota superó el tiempo máximo.",
     "requirements_missing": "El servidor no cumple los requisitos de provisioning.",
     "port_9100_occupied": "El puerto 9100 está ocupado por un servicio no verificado.",
     "installer_failed": "La instalación de Node Exporter no fue validada.",
@@ -195,13 +196,18 @@ class OnboardingService:
         actor: str,
     ) -> None:
         """Ejecuta el flujo en background usando una sesión propia."""
-        session = get_session_factory()()
+        session: Session | None = None
+        onboarding: ServerOnboarding | None = None
+        started = monotonic()
+        logger.debug("onboarding job started id=%s", onboarding_id)
         ssh: SSHSession | None = None
         installed = False
         try:
+            session = get_session_factory()()
             repository = OnboardingRepository(session)
             onboarding = repository.get(onboarding_id)
             if onboarding is None:
+                logger.debug("onboarding job missing id=%s", onboarding_id)
                 return
             server = ServerRepository(session).get(onboarding.server_id)
             if server is None:
@@ -278,6 +284,7 @@ class OnboardingService:
                     "prometheus_unavailable", SAFE_ERRORS["prometheus_unavailable"]
                 )
 
+            self._check_cancel(session, onboarding)
             self._transition(session, onboarding, "validating", actor, True)
             server.enabled = True
             server.status = ServerOperationalStatus.ONLINE
@@ -303,6 +310,7 @@ class OnboardingService:
             server.node_exporter_version = exporter_version_from_output(version_output.stdout)
             server.contract_status = "active"
             server.last_heartbeat_at = datetime.now(UTC)
+            self._check_cancel(session, onboarding)
             onboarding.status = OnboardingStatus.COMPLETED.value
             onboarding.current_step = "completed"
             onboarding.progress_percent = 100
@@ -324,27 +332,34 @@ class OnboardingService:
                 )
             )
             session.commit()
+            logger.debug(
+                "onboarding job completed id=%s duration_ms=%s",
+                onboarding_id,
+                round((monotonic() - started) * 1000, 2),
+            )
         except SSHServiceError as error:
-            self._fail(
-                session,
-                onboarding if "onboarding" in locals() else None,
+            if session is not None:
+                self._fail(session, onboarding, error.code, actor, rollback=installed)
+            logger.debug(
+                "onboarding job failed id=%s code=%s duration_ms=%s",
+                onboarding_id,
                 error.code,
-                actor,
-                rollback=installed,
+                round((monotonic() - started) * 1000, 2),
             )
         except Exception:
             logger.error("onboarding detenido por error interno seguro")
-            self._fail(
-                session,
-                onboarding if "onboarding" in locals() else None,
-                "internal_error",
-                actor,
-                rollback=installed,
+            if session is not None:
+                self._fail(session, onboarding, "internal_error", actor, rollback=installed)
+            logger.debug(
+                "onboarding job failed id=%s code=internal_error duration_ms=%s",
+                onboarding_id,
+                round((monotonic() - started) * 1000, 2),
             )
         finally:
             if ssh is not None:
                 ssh.close()
-            session.close()
+            if session is not None:
+                session.close()
 
     def test_ssh(self, payload: OnboardingTestSSHRequest) -> dict[str, object]:
         """Run the onboarding preflight without installing or mutating anything."""
@@ -1114,6 +1129,13 @@ class OnboardingService:
             )
         )
         session.commit()
+        logger.debug(
+            "onboarding job step id=%s step=%s status=%s success=%s",
+            onboarding.id,
+            step,
+            status,
+            success,
+        )
 
     def _check_cancel(self, session: Session, onboarding: ServerOnboarding) -> None:
         session.refresh(onboarding)
@@ -1154,6 +1176,12 @@ class OnboardingService:
             )
         )
         session.commit()
+        logger.debug(
+            "onboarding job failed-state id=%s step=%s code=%s",
+            onboarding.id,
+            onboarding.current_step,
+            code,
+        )
 
 
 def _external_id(name: str) -> str:

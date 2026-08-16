@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import shlex
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -334,20 +335,26 @@ class SSHSession:
         if as_root and self._username != "root":
             command = _sudo_command(command)
         try:
-            stdin, stdout, stderr = self._client.exec_command(
+            stdin, stdout, _stderr = self._client.exec_command(
                 command, timeout=self._settings.ssh_command_timeout_seconds
             )
             if as_root and sudo_password:
                 stdin.write(f"{sudo_password}\n")
                 stdin.flush()
-            exit_code = int(stdout.channel.recv_exit_status())
+            exit_code, raw_stdout, raw_stderr = _collect_channel_result(
+                stdout.channel, self._settings.ssh_command_timeout_seconds
+            )
             return SSHCommandResult(
                 operation=operation.value,
                 exit_code=exit_code,
-                stdout=_truncate(stdout.read().decode("utf-8", "replace")),
-                stderr=_truncate(stderr.read().decode("utf-8", "replace")),
+                stdout=_truncate(raw_stdout.decode("utf-8", "replace")),
+                stderr=_truncate(raw_stderr.decode("utf-8", "replace")),
             )
-        except (OSError, EOFError, TimeoutError) as error:
+        except TimeoutError as error:
+            raise SSHServiceError(
+                "command_timeout", "La comprobación remota superó el tiempo máximo"
+            ) from error
+        except (OSError, EOFError) as error:
             raise SSHServiceError(
                 "command_failed", "No se pudo completar la comprobación remota"
             ) from error
@@ -389,20 +396,26 @@ class SSHSession:
             command = f"{env} bash {shlex.quote(remote_path)}".strip()
             if as_root and self._username != "root":
                 command = _sudo_command(command)
-            stdin, stdout, stderr = self._client.exec_command(
+            stdin, stdout, _stderr = self._client.exec_command(
                 command, timeout=self._settings.ssh_command_timeout_seconds * 4
             )
             if as_root and sudo_password:
                 stdin.write(f"{sudo_password}\n")
                 stdin.flush()
-            exit_code = int(stdout.channel.recv_exit_status())
+            exit_code, raw_stdout, raw_stderr = _collect_channel_result(
+                stdout.channel, self._settings.ssh_command_timeout_seconds * 4
+            )
             return SSHCommandResult(
                 operation=f"script:{script_name}",
                 exit_code=exit_code,
-                stdout=_truncate(stdout.read().decode("utf-8", "replace")),
-                stderr=_truncate(stderr.read().decode("utf-8", "replace")),
+                stdout=_truncate(raw_stdout.decode("utf-8", "replace")),
+                stderr=_truncate(raw_stderr.decode("utf-8", "replace")),
             )
-        except (OSError, EOFError, TimeoutError) as error:
+        except TimeoutError as error:
+            raise SSHServiceError(
+                "command_timeout", "La instalación remota superó el tiempo máximo"
+            ) from error
+        except (OSError, EOFError) as error:
             raise SSHServiceError(
                 "script_failed", "No se pudo completar la instalación remota"
             ) from error
@@ -416,6 +429,38 @@ class SSHSession:
 
     def close(self) -> None:
         self._client.close()
+
+
+def _collect_channel_result(channel: Any, timeout_seconds: float) -> tuple[int, bytes, bytes]:
+    """Drena stdout/stderr mientras espera un exit status con límite de pared."""
+    deadline = time.monotonic() + timeout_seconds
+    stdout = bytearray()
+    stderr = bytearray()
+    max_output = 64 * 1024
+
+    while not channel.exit_status_ready():
+        _drain_channel(channel, stdout, stderr, max_output)
+        if time.monotonic() >= deadline:
+            raise TimeoutError("SSH command exceeded its time budget")
+        time.sleep(0.05)
+
+    _drain_channel(channel, stdout, stderr, max_output)
+    return int(channel.recv_exit_status()), bytes(stdout), bytes(stderr)
+
+
+def _drain_channel(channel: Any, stdout: bytearray, stderr: bytearray, max_output: int) -> None:
+    while channel.recv_ready():
+        chunk = channel.recv(4096)
+        if not chunk:
+            break
+        if len(stdout) < max_output:
+            stdout.extend(chunk[: max_output - len(stdout)])
+    while channel.recv_stderr_ready():
+        chunk = channel.recv_stderr(4096)
+        if not chunk:
+            break
+        if len(stderr) < max_output:
+            stderr.extend(chunk[: max_output - len(stderr)])
 
 
 def _sudo_command(command: str) -> str:
