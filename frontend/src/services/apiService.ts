@@ -16,6 +16,8 @@ import type {
   OnboardingDiagnosisResponse,
   OnboardingDiscoveryRequest,
   OnboardingDiscoveryResponse,
+  OnboardingTestSSHRequest,
+  OnboardingTestSSHResponse,
   OnboardingHealthResponse,
   MaintenanceAction,
   MaintenanceResponse,
@@ -84,6 +86,8 @@ export const apiService = {
     httpClient.post<OnboardingResponse>(`${API_V1_PREFIX}/onboarding`, payload).then(({ data }) => data),
   discoverOnboarding: (payload: OnboardingDiscoveryRequest): Promise<OnboardingDiscoveryResponse> =>
     httpClient.post<OnboardingDiscoveryResponse>(`${API_V1_PREFIX}/onboarding/discover`, payload).then(({ data }) => data),
+  testSSHConnection: (payload: OnboardingTestSSHRequest): Promise<OnboardingTestSSHResponse> =>
+    httpClient.post<OnboardingTestSSHResponse>(`${API_V1_PREFIX}/onboarding/test-ssh`, payload).then(({ data }) => data),
   getOnboarding: (onboardingId: number): Promise<OnboardingResponse> =>
     getData(`${API_V1_PREFIX}/onboarding/${onboardingId}`),
   getOnboardingAudit: (onboardingId: number): Promise<OnboardingAuditResponse[]> =>

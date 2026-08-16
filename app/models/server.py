@@ -40,6 +40,14 @@ class ServerRole(enum.StrEnum):
     OTHER = "other"
 
 
+class ServerProfile(enum.StrEnum):
+    """Financial/operational importance used by planning screens."""
+
+    CRITICAL = "critical"
+    REPLACEABLE = "replaceable"
+    SHARED = "shared"
+
+
 class ServerOperationalStatus(enum.StrEnum):
     """Estado operativo persistido del servidor."""
 
@@ -72,6 +80,17 @@ class Server(Base):
     group: Mapped[str | None] = mapped_column(String(120), index=True)
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     server_type: Mapped[str | None] = mapped_column("type", String(80), index=True)
+    server_profile: Mapped[ServerProfile] = mapped_column(
+        Enum(
+            ServerProfile,
+            native_enum=False,
+            length=20,
+            values_callable=lambda e: [member.value for member in e],
+        ),
+        default=ServerProfile.REPLACEABLE,
+        server_default=ServerProfile.REPLACEABLE.value,
+        index=True,
+    )
     country: Mapped[str | None] = mapped_column(String(2), index=True)
     network_capacity_mbps: Mapped[float | None] = mapped_column(Float)
     network_interface: Mapped[str | None] = mapped_column(String(100), index=True)

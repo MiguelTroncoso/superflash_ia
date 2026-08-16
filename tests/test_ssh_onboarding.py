@@ -5,12 +5,14 @@ from pathlib import Path
 import paramiko
 import pytest
 
+from app.core.config import Settings
 from app.models.onboarding import ServerOnboarding
-from app.schemas.onboarding import OnboardingStartRequest
+from app.schemas.onboarding import OnboardingStartRequest, OnboardingTestSSHRequest
 from app.services.onboarding_service import OnboardingService
 from app.services.ssh_service import (
     FingerprintHostKeyPolicy,
     RemoteInventory,
+    SSHCommandResult,
     SSHOperation,
     SSHServiceError,
     detect_firewall,
@@ -56,6 +58,7 @@ def test_ssh_operation_catalog_is_closed() -> None:
         SSHOperation.CHECK_EXPORTER_VERSION,
         SSHOperation.SERVICE_STATUS,
         SSHOperation.FIREWALL_STATUS,
+        SSHOperation.CHECK_TEMP_WRITE,
     }
 
 
@@ -180,3 +183,91 @@ def test_discovery_response_is_sanitized_and_does_not_persist_credentials(
     assert response.status_code == 200
     assert secret not in response.text
     assert "stderr" not in response.json()
+
+
+def test_test_ssh_is_read_only_and_returns_safe_inventory(monkeypatch) -> None:
+    operations: list[SSHOperation] = []
+
+    class FakeSession:
+        host_key_fingerprint = "SHA256:approved"
+        host_key_status = "already_trusted"
+
+        def run(self, operation, **_kwargs):
+            operations.append(operation)
+            if operation is SSHOperation.CHECK_SUDO:
+                return SSHCommandResult(operation.value, 0, "0", "")
+            if operation is SSHOperation.CHECK_TEMP_WRITE:
+                return SSHCommandResult(operation.value, 0, "", "")
+            return SSHCommandResult(
+                operation.value,
+                0,
+                "hostname=edge-1\nos=Ubuntu 22.04\nos_version=22.04\narch=x86_64\n"
+                "interfaces=ens18|203.0.113.10/24;\nprimary_interface=ens18",
+                "",
+            )
+
+        def close(self) -> None:
+            return None
+
+    class FakeConnection:
+        def __init__(self, _settings) -> None:
+            pass
+
+        def connect(self, _credentials, _token):
+            return FakeSession()
+
+    service = OnboardingService(
+        Settings(_env_file=None, api_key="test-api-key"), connection_factory=FakeConnection
+    )
+    result = service.test_ssh(
+        OnboardingTestSSHRequest(
+            host="203.0.113.10",
+            username="root",
+            auth_method="password",
+            password="temporary-secret",
+            host_key_fingerprint="SHA256:approved",
+            confirm_host_key=True,
+        )
+    )
+
+    assert result["authentication_ok"] is True
+    assert result["privilege_ok"] is True
+    assert result["temp_write_ok"] is True
+    assert result["hostname"] == "edge-1"
+    assert SSHOperation.CHECK_TEMP_WRITE in operations
+    assert "temporary-secret" not in str(result)
+
+
+def test_test_ssh_endpoint_never_returns_ephemeral_password(client, monkeypatch) -> None:
+    secret = "temporary-password-not-returned"
+    monkeypatch.setattr(
+        OnboardingService,
+        "test_ssh",
+        lambda *_args, **_kwargs: {
+            "reachable": True,
+            "authentication_ok": True,
+            "privilege_ok": True,
+            "temp_write_ok": True,
+            "host_key_fingerprint": "SHA256:approved",
+            "host_key_status": "already_trusted",
+            "hostname": "edge-1",
+            "os": "Ubuntu",
+            "os_version": "22.04",
+            "architecture": "x86_64",
+            "interfaces": [],
+            "discovered_inventory": {"hostname": "edge-1"},
+        },
+    )
+
+    response = client.post(
+        "/api/v1/onboarding/test-ssh",
+        json={
+            "host": "203.0.113.10",
+            "username": "root",
+            "auth_method": "password",
+            "password": secret,
+        },
+    )
+
+    assert response.status_code == 200
+    assert secret not in response.text

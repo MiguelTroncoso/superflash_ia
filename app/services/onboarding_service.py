@@ -26,6 +26,7 @@ from app.schemas.onboarding import (
     OnboardingDiscoveryRequest,
     OnboardingStartRequest,
     OnboardingStatus,
+    OnboardingTestSSHRequest,
 )
 from app.services.ssh_service import (
     RemoteInventory,
@@ -63,6 +64,18 @@ STEP_PROGRESS: dict[str, tuple[str, int]] = {
 
 SAFE_ERRORS: dict[str, str] = {
     "authentication_failed": "La autenticación SSH fue rechazada.",
+    "wrong_password": "La contraseña SSH no fue aceptada.",
+    "ssh_user_not_found": "El usuario SSH no existe en el servidor.",
+    "root_login_disabled": "El acceso SSH directo de root está deshabilitado.",
+    "password_authentication_disabled": (
+        "La autenticación por contraseña está deshabilitada; usa una clave privada."
+    ),
+    "public_key_required": "El servidor requiere autenticación por clave pública.",
+    "permission_denied": "El acceso SSH fue denegado.",
+    "ssh_timeout": "La conexión SSH agotó el tiempo de espera.",
+    "host_unreachable": "El servidor no es alcanzable por SSH.",
+    "firewall_blocked": "La conexión SSH fue rechazada por el servidor o firewall.",
+    "fingerprint_mismatch": "La huella SSH no coincide; el onboarding fue bloqueado.",
     "host_key_invalid": "La host key SSH no coincide con la registrada.",
     "host_key_new": "Se requiere confirmar la huella de la host key SSH.",
     "host_key_changed": "La host key SSH cambió y fue bloqueada.",
@@ -82,6 +95,9 @@ SAFE_ERRORS: dict[str, str] = {
     "internal_error": "Onboarding detenido por un error interno seguro.",
     "invalid_private_key": "La clave privada SSH no es válida.",
     "maintenance_failed": "La acción administrada no pudo validarse.",
+    "temporary_directory_unavailable": (
+        "El usuario no tiene acceso de escritura al directorio temporal."
+    ),
 }
 
 
@@ -123,6 +139,7 @@ class OnboardingService:
                 "datacenter": payload.datacenter,
                 "country": payload.country.upper() if payload.country else None,
                 "server_type": payload.server_type,
+                "server_profile": payload.server_profile,
                 "network_interface": payload.network_interface,
                 "network_capacity_mbps": payload.physical_capacity_mbps,
                 "operational_network_limit_mbps": payload.operational_target_mbps,
@@ -329,6 +346,106 @@ class OnboardingService:
                 ssh.close()
             session.close()
 
+    def test_ssh(self, payload: OnboardingTestSSHRequest) -> dict[str, object]:
+        """Run the onboarding preflight without installing or mutating anything."""
+        credentials = SSHCredentials(
+            host=payload.host,
+            port=payload.port,
+            username=payload.username,
+            password=payload.password,
+            private_key=payload.private_key,
+            expected_host_key_fingerprint=(
+                payload.host_key_fingerprint if payload.confirm_host_key else None
+            ),
+        )
+        result: dict[str, object] = {
+            "reachable": False,
+            "authentication_ok": False,
+            "privilege_ok": False,
+            "temp_write_ok": False,
+            "host_key_fingerprint": payload.host_key_fingerprint,
+            "host_key_status": "unknown",
+            "hostname": None,
+            "os": None,
+            "os_version": None,
+            "architecture": None,
+            "interfaces": [],
+            "discovered_inventory": None,
+            "error_code": None,
+            "error_message": None,
+            "probable_cause": None,
+        }
+        ssh: SSHSession | None = None
+        try:
+            ssh = self._connection_factory(self._settings).connect(
+                credentials, secrets.token_hex(8)
+            )
+            result["reachable"] = True
+            result["authentication_ok"] = True
+            result["host_key_fingerprint"] = ssh.host_key_fingerprint
+            result["host_key_status"] = ssh.host_key_status
+
+            privilege = ssh.run(SSHOperation.CHECK_SUDO)
+            if privilege.ok and privilege.stdout.strip() == "0":
+                result["privilege_ok"] = True
+            else:
+                privilege = ssh.run(
+                    SSHOperation.CHECK_SUDO,
+                    as_root=True,
+                    sudo_password=payload.password,
+                )
+                result["privilege_ok"] = privilege.ok and privilege.stdout.strip() == "0"
+
+            temp_write = ssh.run(SSHOperation.CHECK_TEMP_WRITE)
+            result["temp_write_ok"] = temp_write.ok
+            if not temp_write.ok:
+                result["error_code"] = "temporary_directory_unavailable"
+                result["error_message"] = SAFE_ERRORS["temporary_directory_unavailable"]
+                result["probable_cause"] = "El usuario autenticado no puede escribir en /tmp."
+
+            raw_inventory = ssh.run(SSHOperation.DETECT_INVENTORY)
+            inventory = parse_inventory_output(raw_inventory.stdout) if raw_inventory.ok else None
+            if inventory is None or inventory.hostname == "unknown":
+                result["error_code"] = "inventory_failed"
+                result["error_message"] = SAFE_ERRORS["inventory_failed"]
+                result["probable_cause"] = "El catálogo de inventario no pudo ejecutarse."
+            else:
+                inventory_payload = inventory.payload()
+                result["discovered_inventory"] = inventory_payload
+                result["hostname"] = inventory.hostname
+                result["os"] = inventory.os
+                result["os_version"] = inventory.os_version
+                result["architecture"] = inventory.arch
+                result["interfaces"] = inventory.interfaces
+            if not result["privilege_ok"] and result["error_code"] is None:
+                result["error_code"] = "permission_denied"
+                result["error_message"] = SAFE_ERRORS["permission_denied"]
+                result["probable_cause"] = "El usuario no tiene root ni sudo utilizable."
+            return result
+        except SSHServiceError as error:
+            safe_code = "fingerprint_mismatch" if error.code == "host_key_changed" else error.code
+            result["error_code"] = safe_code
+            result["error_message"] = SAFE_ERRORS.get(safe_code, SAFE_ERRORS["internal_error"])
+            result["probable_cause"] = error.probable_cause
+            result["host_key_fingerprint"] = error.fingerprint or result["host_key_fingerprint"]
+            if error.code == "host_key_new":
+                result["reachable"] = True
+                result["host_key_status"] = "new"
+            elif error.code in {"host_key_changed", "fingerprint_mismatch"}:
+                result["reachable"] = True
+                result["host_key_status"] = "changed"
+            elif error.code in {
+                "wrong_password",
+                "permission_denied",
+                "password_authentication_disabled",
+                "public_key_required",
+            }:
+                result["reachable"] = True
+            return result
+        finally:
+            if ssh is not None:
+                ssh.close()
+
     def discover(self, payload: OnboardingDiscoveryRequest) -> dict[str, object]:
         """Descubre un host sin crear registros ni ejecutar cambios remotos."""
         credentials = SSHCredentials(
@@ -357,6 +474,9 @@ class OnboardingService:
             "systemd_available": False,
             "warnings": [],
             "blocking_errors": [],
+            "error_code": None,
+            "error_message": None,
+            "probable_cause": None,
         }
         warnings = result["warnings"]
         blocking_errors = result["blocking_errors"]
@@ -369,7 +489,7 @@ class OnboardingService:
             )
             result["reachable"] = True
             result["authentication_ok"] = True
-            result["host_key_status"] = "confirmed"
+            result["host_key_status"] = ssh.host_key_status
             result["host_key_fingerprint"] = ssh.host_key_fingerprint
 
             requirements = ssh.run(SSHOperation.CHECK_REQUIREMENTS)
@@ -433,6 +553,10 @@ class OnboardingService:
                 warnings.append("PRIMARY_INTERFACE_NOT_DETECTED")
             return result
         except SSHServiceError as error:
+            safe_code = "fingerprint_mismatch" if error.code == "host_key_changed" else error.code
+            result["error_code"] = safe_code
+            result["error_message"] = SAFE_ERRORS.get(safe_code, SAFE_ERRORS["internal_error"])
+            result["probable_cause"] = error.probable_cause
             if error.code in {"host_key_new", "host_key_changed"}:
                 result["reachable"] = True
                 result["host_key_status"] = "new" if error.code == "host_key_new" else "changed"
@@ -442,10 +566,16 @@ class OnboardingService:
                     if error.code == "host_key_new"
                     else "HOST_KEY_CHANGED"
                 )
-            elif error.code == "authentication_failed":
+            elif error.code in {
+                "authentication_failed",
+                "wrong_password",
+                "password_authentication_disabled",
+                "public_key_required",
+                "permission_denied",
+            }:
                 result["reachable"] = True
-                result["host_key_status"] = "confirmed"
-                blocking_errors.append("AUTHENTICATION_FAILED")
+                result["host_key_status"] = "already_trusted"
+                blocking_errors.append(error.code.upper())
             elif error.code == "invalid_private_key":
                 blocking_errors.append("INVALID_PRIVATE_KEY")
             else:
@@ -488,7 +618,12 @@ class OnboardingService:
                 else "stale"
             )
             metrics_available = latest_metric is not None
-            prometheus = "configured" if server.prometheus_configured else "not_configured"
+            prometheus_target_status = self._prometheus_target_status(server)
+            prometheus = (
+                "configured"
+                if prometheus_target_status == "UP"
+                else prometheus_target_status.lower()
+            )
             ssh = "configured" if server.ssh_host_key_fingerprint else "unknown"
             node_exporter = server.node_exporter_status or "unknown"
             completed = onboarding.status == OnboardingStatus.COMPLETED.value
@@ -519,6 +654,7 @@ class OnboardingService:
                 "exporter_version": server.node_exporter_version,
                 "firewall": "configured" if completed else "unknown",
                 "prometheus": prometheus,
+                "prometheus_target_status": prometheus_target_status,
                 "inventory": "available" if snapshot is not None else "missing",
                 "network_interface": server.network_interface,
                 "metrics_available": metrics_available,
@@ -779,7 +915,9 @@ class OnboardingService:
                 )
             if result["network"] != "PASS":
                 errors.append("La interfaz de red configurada no está disponible")
-            if server.prometheus_url and self._probe_prometheus(server):
+            prometheus_target_status = self._prometheus_target_status(server)
+            result["prometheus_target_status"] = prometheus_target_status
+            if prometheus_target_status == "UP":
                 result["prometheus"] = "PASS"
                 latest_metric = session.scalar(
                     select(ServerMetric)
@@ -791,7 +929,11 @@ class OnboardingService:
                     latest_metric.collected_at.isoformat() if latest_metric else None
                 )
             else:
-                errors.append(SAFE_ERRORS["prometheus_unavailable"])
+                errors.append(
+                    SAFE_ERRORS["prometheus_not_configured"]
+                    if prometheus_target_status == "CONNECTION_FAILED" and not server.prometheus_url
+                    else SAFE_ERRORS["prometheus_unavailable"]
+                )
             result["latency_ms"] = round((monotonic() - started) * 1000, 2)
             checks = [result[key] for key in ("node_exporter", "prometheus", "firewall", "network")]
             result["status"] = "PASS" if all(value == "PASS" for value in checks) else "PARTIAL"
@@ -905,8 +1047,12 @@ class OnboardingService:
         return snapshot
 
     def _probe_prometheus(self, server: Server) -> bool:
+        return self._prometheus_target_status(server) == "UP"
+
+    def _prometheus_target_status(self, server: Server) -> str:
+        """Returns the public target state without exposing URL or token details."""
         if not server.prometheus_url or not server.hostname:
-            return False
+            return "CONNECTION_FAILED"
         inventory = Inventory(
             servers=[
                 InventoryServer(
@@ -927,8 +1073,16 @@ class OnboardingService:
             bearer_token=self._settings.prometheus_bearer_token,
             verify_tls=self._settings.prometheus_tls_verify,
         )
-        probe = adapter.probe()[0]
-        return probe.reachable and probe.up_value is not None and probe.up_value > 0
+        try:
+            probes = adapter.probe()
+        except Exception:
+            logger.warning("falló el diagnóstico del target Prometheus")
+            return "CONNECTION_FAILED"
+        if not probes or not probes[0].reachable:
+            return "CONNECTION_FAILED"
+        if probes[0].up_value is None:
+            return "PENDING_SCRAPE"
+        return "UP" if probes[0].up_value > 0 else "CONNECTION_FAILED"
 
     def _transition(
         self,

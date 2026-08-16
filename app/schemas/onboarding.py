@@ -5,6 +5,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.models.server import ServerProfile
+
 
 class OnboardingAuthMethod(enum.StrEnum):
     PRIVATE_KEY = "private_key"
@@ -44,7 +46,7 @@ class OnboardingStep(enum.StrEnum):
 class OnboardingCredentials(BaseModel):
     """Credencial efímera: solo vive durante la solicitud y tarea en memoria."""
 
-    auth_method: OnboardingAuthMethod
+    auth_method: OnboardingAuthMethod = OnboardingAuthMethod.PASSWORD
     password: str | None = Field(default=None, min_length=1, max_length=4096)
     private_key: str | None = Field(default=None, min_length=1, max_length=20000)
 
@@ -71,6 +73,10 @@ class OnboardingDiscoveryRequest(OnboardingCredentials):
     confirm_host_key: bool = False
 
 
+class OnboardingTestSSHRequest(OnboardingDiscoveryRequest):
+    """Read-only connection test; it never installs or changes remote state."""
+
+
 class OnboardingDiscoveryRead(BaseModel):
     """Resultado sanitizado de auto discovery."""
 
@@ -89,6 +95,29 @@ class OnboardingDiscoveryRead(BaseModel):
     systemd_available: bool
     warnings: list[str]
     blocking_errors: list[str]
+    error_code: str | None = None
+    error_message: str | None = None
+    probable_cause: str | None = None
+
+
+class OnboardingTestSSHRead(BaseModel):
+    """Sanitized result of the independent SSH preflight."""
+
+    reachable: bool
+    authentication_ok: bool
+    privilege_ok: bool
+    temp_write_ok: bool
+    host_key_fingerprint: str | None
+    host_key_status: str
+    hostname: str | None
+    os: str | None
+    os_version: str | None
+    architecture: str | None
+    interfaces: list[dict[str, object]]
+    discovered_inventory: dict[str, object] | None
+    error_code: str | None = None
+    error_message: str | None = None
+    probable_cause: str | None = None
 
 
 class OnboardingHealthRead(BaseModel):
@@ -101,6 +130,7 @@ class OnboardingHealthRead(BaseModel):
     exporter_version: str | None
     firewall: str
     prometheus: str
+    prometheus_target_status: str | None = None
     inventory: str
     network_interface: str | None
     metrics_available: bool
@@ -149,6 +179,7 @@ class OnboardingStartRequest(OnboardingCredentials):
     datacenter: str | None = Field(default=None, max_length=120)
     country: str | None = Field(default=None, min_length=2, max_length=2)
     server_type: str | None = Field(default=None, max_length=80)
+    server_profile: ServerProfile = ServerProfile.REPLACEABLE
     network_interface: str | None = Field(
         default=None, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$"
     )
@@ -175,6 +206,7 @@ class OnboardingDiagnosisRead(BaseModel):
     prometheus: str
     firewall: str
     network: str
+    prometheus_target_status: str | None = None
     latency_ms: float | None
     last_sample: str | None
     errors: list[str]

@@ -73,6 +73,7 @@ export interface ServerResponse {
   group: string | null
   tags: string[]
   type: string | null
+  server_profile?: 'critical' | 'replaceable' | 'shared'
   country: string | null
   network_capacity_mbps: number | null
   network_speed_mbps: number | null
@@ -341,6 +342,7 @@ export interface OnboardingDiagnosisResponse {
   prometheus: 'PASS' | 'PARTIAL' | 'FAIL'
   firewall: 'PASS' | 'PARTIAL' | 'FAIL'
   network: 'PASS' | 'PARTIAL' | 'FAIL'
+  prometheus_target_status?: 'UP' | 'PENDING_SCRAPE' | 'CONNECTION_FAILED' | string | null
   latency_ms: number | null
   last_sample: string | null
   errors: string[]
@@ -373,6 +375,29 @@ export interface OnboardingDiscoveryResponse {
   systemd_available: boolean
   warnings: string[]
   blocking_errors: string[]
+  error_code?: string | null
+  error_message?: string | null
+  probable_cause?: string | null
+}
+
+export interface OnboardingTestSSHRequest extends OnboardingDiscoveryRequest {}
+
+export interface OnboardingTestSSHResponse {
+  reachable: boolean
+  authentication_ok: boolean
+  privilege_ok: boolean
+  temp_write_ok: boolean
+  host_key_fingerprint: string | null
+  host_key_status: string
+  hostname: string | null
+  os: string | null
+  os_version: string | null
+  architecture: string | null
+  interfaces: Array<Record<string, unknown>>
+  discovered_inventory: Record<string, unknown> | null
+  error_code?: string | null
+  error_message?: string | null
+  probable_cause?: string | null
 }
 
 export interface OnboardingHealthResponse {
@@ -383,6 +408,7 @@ export interface OnboardingHealthResponse {
   exporter_version: string | null
   firewall: string
   prometheus: string
+  prometheus_target_status?: 'UP' | 'PENDING_SCRAPE' | 'CONNECTION_FAILED' | string | null
   inventory: string
   network_interface: string | null
   metrics_available: boolean
@@ -417,6 +443,8 @@ export interface OnboardingStartRequest {
   datacenter?: string
   country?: string
   server_type?: string
+  server_profile?: 'critical' | 'replaceable' | 'shared'
+  prometheus_url?: string
   physical_capacity_mbps?: number
   operational_target_mbps?: number
   recommended_max_mbps?: number
