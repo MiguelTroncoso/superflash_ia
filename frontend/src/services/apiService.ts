@@ -63,6 +63,13 @@ async function getData<T>(path: string, params?: QueryParams): Promise<T> {
   return response.data
 }
 
+async function postData<T>(path: string, payload: unknown, signal?: AbortSignal): Promise<T> {
+  const response = signal === undefined
+    ? await httpClient.post<T>(path, payload)
+    : await httpClient.post<T>(path, payload, { signal })
+  return response.data
+}
+
 export const apiService = {
   getOverview: (): Promise<OverviewResponse> => getData(`${API_V1_PREFIX}/overview`),
   getServers: (params?: ServerListParams): Promise<ServerPageResponse> =>
@@ -82,12 +89,12 @@ export const apiService = {
   getBalance: (): Promise<BalanceResponse> => getData(`${API_V1_PREFIX}/balance`),
   getRecommendations: (): Promise<RecommendationsResponse> =>
     getData(`${API_V1_PREFIX}/recommendations`),
-  startOnboarding: (payload: OnboardingStartRequest): Promise<OnboardingResponse> =>
-    httpClient.post<OnboardingResponse>(`${API_V1_PREFIX}/onboarding`, payload).then(({ data }) => data),
-  discoverOnboarding: (payload: OnboardingDiscoveryRequest): Promise<OnboardingDiscoveryResponse> =>
-    httpClient.post<OnboardingDiscoveryResponse>(`${API_V1_PREFIX}/onboarding/discover`, payload).then(({ data }) => data),
-  testSSHConnection: (payload: OnboardingTestSSHRequest): Promise<OnboardingTestSSHResponse> =>
-    httpClient.post<OnboardingTestSSHResponse>(`${API_V1_PREFIX}/onboarding/test-ssh`, payload).then(({ data }) => data),
+  startOnboarding: (payload: OnboardingStartRequest, signal?: AbortSignal): Promise<OnboardingResponse> =>
+    postData<OnboardingResponse>(`${API_V1_PREFIX}/onboarding`, payload, signal),
+  discoverOnboarding: (payload: OnboardingDiscoveryRequest, signal?: AbortSignal): Promise<OnboardingDiscoveryResponse> =>
+    postData<OnboardingDiscoveryResponse>(`${API_V1_PREFIX}/onboarding/discover`, payload, signal),
+  testSSHConnection: (payload: OnboardingTestSSHRequest, signal?: AbortSignal): Promise<OnboardingTestSSHResponse> =>
+    postData<OnboardingTestSSHResponse>(`${API_V1_PREFIX}/onboarding/test-ssh`, payload, signal),
   getOnboarding: (onboardingId: number): Promise<OnboardingResponse> =>
     getData(`${API_V1_PREFIX}/onboarding/${onboardingId}`),
   getOnboardingAudit: (onboardingId: number): Promise<OnboardingAuditResponse[]> =>

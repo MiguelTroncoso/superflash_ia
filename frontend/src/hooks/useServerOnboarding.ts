@@ -18,6 +18,7 @@ const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'rollback_
 type CredentialPayload = Pick<OnboardingStartRequest, 'auth_method' | 'password' | 'private_key'>
 type RetryVariables = { id: number; payload: CredentialPayload }
 type DiagnosisVariables = { id: number; payload: CredentialPayload }
+type RequestVariables<T> = { payload: T; signal?: AbortSignal }
 type MaintenanceVariables = {
   serverId: number
   action: MaintenanceAction
@@ -28,12 +29,14 @@ export function useServerOnboarding(onboardingId: number | null): {
   onboarding: OnboardingResponse | undefined
   isLoading: boolean
   isError: boolean
+  error: Error | null
   isFetching: boolean
+  lastUpdatedAt: number
   health: OnboardingHealthResponse | undefined
-  discover: ReturnType<typeof useMutation<OnboardingDiscoveryResponse, Error, OnboardingDiscoveryRequest>>
-  testSSH: ReturnType<typeof useMutation<OnboardingTestSSHResponse, Error, OnboardingTestSSHRequest>>
+  discover: ReturnType<typeof useMutation<OnboardingDiscoveryResponse, Error, RequestVariables<OnboardingDiscoveryRequest>>>
+  testSSH: ReturnType<typeof useMutation<OnboardingTestSSHResponse, Error, RequestVariables<OnboardingTestSSHRequest>>>
   refetch: () => Promise<void>
-  start: ReturnType<typeof useMutation<OnboardingResponse, Error, OnboardingStartRequest>>
+  start: ReturnType<typeof useMutation<OnboardingResponse, Error, RequestVariables<OnboardingStartRequest>>>
   retry: UseMutationResult<OnboardingResponse, Error, RetryVariables, unknown>
   cancel: UseMutationResult<OnboardingResponse, Error, void, unknown>
   rollback: UseMutationResult<OnboardingResponse, Error, RetryVariables, unknown>
@@ -48,20 +51,27 @@ export function useServerOnboarding(onboardingId: number | null): {
     staleTime: 1_000,
     refetchInterval: (current) => {
       const status = current.state.data?.status
-      return status && !terminalStatuses.has(status) ? 1_500 : false
+      return status && terminalStatuses.has(status) ? false : 1_500
     },
+    refetchIntervalInBackground: true,
+    retry: 2,
   })
-  const invalidate = async (): Promise<void> => {
+  const invalidateServers = async (): Promise<void> => {
     await queryClient.invalidateQueries({ queryKey: ['servers'] })
   }
-  const start = useMutation({ mutationFn: apiService.startOnboarding, onSuccess: invalidate })
-  const discover = useMutation({ mutationFn: apiService.discoverOnboarding })
-  const testSSH = useMutation({ mutationFn: apiService.testSSHConnection })
-  const retry = useMutation({ mutationFn: ({ id, payload }: RetryVariables) => apiService.retryOnboarding(id, payload), onSuccess: invalidate })
-  const cancel = useMutation({ mutationFn: () => apiService.cancelOnboarding(onboardingId as number) })
-  const rollback = useMutation({ mutationFn: ({ id, payload }: RetryVariables) => apiService.rollbackOnboarding(id, payload), onSuccess: invalidate })
+  const syncOnboarding = async (data: OnboardingResponse): Promise<void> => {
+    await queryClient.cancelQueries({ queryKey: ['server-onboarding', data.id] })
+    queryClient.setQueryData(['server-onboarding', data.id], data)
+    await invalidateServers()
+  }
+  const start = useMutation({ mutationFn: ({ payload, signal }: RequestVariables<OnboardingStartRequest>) => apiService.startOnboarding(payload, signal), onSuccess: syncOnboarding })
+  const discover = useMutation({ mutationFn: ({ payload, signal }: RequestVariables<OnboardingDiscoveryRequest>) => apiService.discoverOnboarding(payload, signal) })
+  const testSSH = useMutation({ mutationFn: ({ payload, signal }: RequestVariables<OnboardingTestSSHRequest>) => apiService.testSSHConnection(payload, signal) })
+  const retry = useMutation({ mutationFn: ({ id, payload }: RetryVariables) => apiService.retryOnboarding(id, payload), onSuccess: syncOnboarding })
+  const cancel = useMutation({ mutationFn: () => apiService.cancelOnboarding(onboardingId as number), onSuccess: syncOnboarding })
+  const rollback = useMutation({ mutationFn: ({ id, payload }: RetryVariables) => apiService.rollbackOnboarding(id, payload), onSuccess: syncOnboarding })
   const diagnose = useMutation({ mutationFn: ({ id, payload }: DiagnosisVariables) => apiService.diagnoseOnboarding(id, payload) })
-  const maintenance = useMutation({ mutationFn: ({ serverId, action, payload }: MaintenanceVariables) => apiService.maintenance(serverId, action, payload), onSuccess: invalidate })
+  const maintenance = useMutation({ mutationFn: ({ serverId, action, payload }: MaintenanceVariables) => apiService.maintenance(serverId, action, payload), onSuccess: invalidateServers })
   const healthQuery = useQuery({
     queryKey: ['server-onboarding-health', onboardingId],
     queryFn: () => apiService.getOnboardingHealth(onboardingId as number),
@@ -73,7 +83,9 @@ export function useServerOnboarding(onboardingId: number | null): {
     onboarding: query.data,
     isLoading: query.isPending,
     isError: query.isError,
+    error: query.error,
     isFetching: query.isFetching,
+    lastUpdatedAt: query.dataUpdatedAt,
     health: healthQuery.data,
     discover,
     testSSH,

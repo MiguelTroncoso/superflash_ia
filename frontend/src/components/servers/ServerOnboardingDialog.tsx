@@ -1,5 +1,5 @@
 import { LoaderCircle, ServerCog, ShieldCheck, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useServerOnboarding } from '../../hooks/useServerOnboarding'
 import type { OnboardingDiscoveryResponse, OnboardingStartRequest, OnboardingTestSSHResponse } from '../../types/api'
 import { OnboardingDiagnosticSummary } from './OnboardingDiagnosticSummary'
@@ -7,6 +7,10 @@ import { OnboardingStepProgress } from './OnboardingStepProgress'
 
 interface Props { onClose: () => void }
 type Phase = 'detect' | 'fingerprint' | 'test' | 'prepare'
+type RequestKind = 'discover' | 'test_ssh' | 'start'
+
+const REQUEST_TIMEOUT_MS = 30_000
+const JOB_VISUAL_TIMEOUT_SECONDS = 30
 
 const steps = [
   { key: 'connecting', label: 'Connect' }, { key: 'authenticating', label: 'Authenticate' },
@@ -35,9 +39,70 @@ export function ServerOnboardingDialog({ onClose }: Props): React.JSX.Element {
   const [discovery, setDiscovery] = useState<OnboardingDiscoveryResponse>()
   const [testResult, setTestResult] = useState<OnboardingTestSSHResponse>()
   const [confirmHostKey, setConfirmHostKey] = useState(false)
+  const [requestStartedAt, setRequestStartedAt] = useState<number | null>(null)
+  const [requestTimedOut, setRequestTimedOut] = useState(false)
+  const [requestError, setRequestError] = useState<string | null>(null)
+  const [, setClock] = useState(() => Date.now())
+  const requestGeneration = useRef(0)
+  const requestRef = useRef<{ kind: RequestKind; generation: number; controller: AbortController } | undefined>(undefined)
+  const requestTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const onboarding = useServerOnboarding(onboardingId)
   const active = onboarding.onboarding
-  const busy = onboarding.start.isPending || onboarding.discover.isPending || onboarding.testSSH.isPending || onboarding.retry.isPending || onboarding.rollback.isPending
+  const busy = requestStartedAt !== null && !requestTimedOut
+
+  useEffect(() => {
+    const timer = setInterval(() => setClock(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => () => {
+    requestRef.current?.controller.abort()
+    if (requestTimer.current) clearTimeout(requestTimer.current)
+  }, [])
+
+  function beginRequest(kind: RequestKind): { generation: number; controller: AbortController } {
+    requestRef.current?.controller.abort()
+    if (requestTimer.current) clearTimeout(requestTimer.current)
+    const generation = requestGeneration.current + 1
+    requestGeneration.current = generation
+    const controller = new AbortController()
+    requestRef.current = { kind, generation, controller }
+    setRequestStartedAt(Date.now())
+    setRequestTimedOut(false)
+    setRequestError(null)
+    requestTimer.current = setTimeout(() => {
+      if (requestRef.current?.generation !== generation) return
+      controller.abort()
+      setRequestTimedOut(true)
+      setRequestError('La solicitud de onboarding superó los 30 segundos. Puedes reintentar o iniciar una nueva discovery.')
+    }, REQUEST_TIMEOUT_MS)
+    return { generation, controller }
+  }
+
+  function finishRequest(generation: number): void {
+    if (requestRef.current?.generation !== generation) return
+    if (requestTimer.current) clearTimeout(requestTimer.current)
+    requestRef.current = undefined
+    setRequestStartedAt(null)
+  }
+
+  function resetDiscovery(): void {
+    requestGeneration.current += 1
+    requestRef.current?.controller.abort()
+    if (requestTimer.current) clearTimeout(requestTimer.current)
+    requestRef.current = undefined
+    setRequestStartedAt(null)
+    setRequestTimedOut(false)
+    setRequestError(null)
+    setDiscovery(undefined)
+    setTestResult(undefined)
+    setConfirmHostKey(false)
+    setPhase('detect')
+  }
+
+  function isCurrentRequest(generation: number): boolean {
+    return requestRef.current?.generation === generation
+  }
 
   function update<K extends keyof OnboardingStartRequest>(key: K, value: OnboardingStartRequest[K]): void {
     setForm((current) => ({ ...current, [key]: value }))
@@ -49,36 +114,68 @@ export function ServerOnboardingDialog({ onClose }: Props): React.JSX.Element {
 
   async function detectServer(event: React.FormEvent): Promise<void> {
     event.preventDefault()
-    const response = await onboarding.discover.mutateAsync({ host: form.ip, port: form.ssh_port, username: form.ssh_username, ...credentials(), confirm_host_key: false })
-    setDiscovery(response)
-    update('network_interface', response.detected_interface ?? undefined)
-    setConfirmHostKey(response.host_key_status === 'already_trusted' || response.host_key_status === 'confirmed')
-    setPhase(response.host_key_status === 'new' || response.host_key_status === 'changed' ? 'fingerprint' : 'test')
+    const request = beginRequest('discover')
+    try {
+      const response = await onboarding.discover.mutateAsync({ payload: { host: form.ip, port: form.ssh_port, username: form.ssh_username, ...credentials(), confirm_host_key: false }, signal: request.controller.signal })
+      if (!isCurrentRequest(request.generation)) return
+      setDiscovery(response)
+      update('network_interface', response.detected_interface ?? undefined)
+      setConfirmHostKey(response.host_key_status === 'already_trusted' || response.host_key_status === 'confirmed')
+      setPhase(response.host_key_status === 'new' || response.host_key_status === 'changed' ? 'fingerprint' : 'test')
+    } catch (error) {
+      if (isCurrentRequest(request.generation) && !request.controller.signal.aborted) setRequestError(errorMessage(error))
+    } finally {
+      finishRequest(request.generation)
+    }
   }
 
   async function confirmFingerprint(event: React.FormEvent): Promise<void> {
     event.preventDefault()
     if (!confirmHostKey || !discovery?.host_key_fingerprint) return
-    const response = await onboarding.discover.mutateAsync({ host: form.ip, port: form.ssh_port, username: form.ssh_username, ...credentials(), host_key_fingerprint: discovery.host_key_fingerprint, confirm_host_key: true })
-    setDiscovery(response)
-    if (response.host_key_status !== 'changed') setPhase('test')
+    const request = beginRequest('discover')
+    try {
+      const response = await onboarding.discover.mutateAsync({ payload: { host: form.ip, port: form.ssh_port, username: form.ssh_username, ...credentials(), host_key_fingerprint: discovery.host_key_fingerprint, confirm_host_key: true }, signal: request.controller.signal })
+      if (!isCurrentRequest(request.generation)) return
+      setDiscovery(response)
+      if (response.host_key_status !== 'changed') setPhase('test')
+    } catch (error) {
+      if (isCurrentRequest(request.generation) && !request.controller.signal.aborted) setRequestError(errorMessage(error))
+    } finally {
+      finishRequest(request.generation)
+    }
   }
 
   async function testSSH(event: React.FormEvent): Promise<void> {
     event.preventDefault()
     if (!discovery?.host_key_fingerprint) return
-    const response = await onboarding.testSSH.mutateAsync({ host: form.ip, port: form.ssh_port, username: form.ssh_username, ...credentials(), host_key_fingerprint: discovery.host_key_fingerprint, confirm_host_key: true })
-    setTestResult(response)
-    if (response.host_key_status !== 'changed' && response.authentication_ok) setPhase('prepare')
+    const request = beginRequest('test_ssh')
+    try {
+      const response = await onboarding.testSSH.mutateAsync({ payload: { host: form.ip, port: form.ssh_port, username: form.ssh_username, ...credentials(), host_key_fingerprint: discovery.host_key_fingerprint, confirm_host_key: true }, signal: request.controller.signal })
+      if (!isCurrentRequest(request.generation)) return
+      setTestResult(response)
+      if (response.host_key_status !== 'changed' && response.authentication_ok) setPhase('prepare')
+    } catch (error) {
+      if (isCurrentRequest(request.generation) && !request.controller.signal.aborted) setRequestError(errorMessage(error))
+    } finally {
+      finishRequest(request.generation)
+    }
   }
 
   async function prepareServer(event: React.FormEvent): Promise<void> {
     event.preventDefault()
     if (!discovery?.host_key_fingerprint || !testResult?.authentication_ok || !form.name) return
-    const response = await onboarding.start.mutateAsync({ ...form, host_key_fingerprint: discovery.host_key_fingerprint, physical_capacity_mbps: selectedCapacity(capacityChoice, customCapacity), ...credentials() })
-    setOnboardingId(response.id)
-    setPassword('')
-    setPrivateKey('')
+    const request = beginRequest('start')
+    try {
+      const response = await onboarding.start.mutateAsync({ payload: { ...form, host_key_fingerprint: discovery.host_key_fingerprint, physical_capacity_mbps: selectedCapacity(capacityChoice, customCapacity), ...credentials() }, signal: request.controller.signal })
+      if (!isCurrentRequest(request.generation)) return
+      setOnboardingId(response.id)
+      setPassword('')
+      setPrivateKey('')
+    } catch (error) {
+      if (isCurrentRequest(request.generation) && !request.controller.signal.aborted) setRequestError(errorMessage(error))
+    } finally {
+      finishRequest(request.generation)
+    }
   }
 
   async function submit(event: React.FormEvent): Promise<void> {
@@ -92,7 +189,7 @@ export function ServerOnboardingDialog({ onClose }: Props): React.JSX.Element {
     if (onboardingId) await onboarding.retry.mutateAsync({ id: onboardingId, payload: credentials() })
   }
 
-  const error = discovery?.error_message ?? testResult?.error_message ?? onboarding.discover.error?.message ?? onboarding.testSSH.error?.message ?? onboarding.start.error?.message ?? onboarding.retry.error?.message ?? active?.last_error_message_sanitized
+  const error = requestError ?? discovery?.error_message ?? testResult?.error_message ?? active?.last_error_message_sanitized ?? onboarding.error?.message ?? mutationError(onboarding.discover.error) ?? mutationError(onboarding.testSSH.error) ?? mutationError(onboarding.start.error) ?? mutationError(onboarding.retry.error)
   const hasCredentials = form.auth_method === 'password' ? password.length > 0 : privateKey.length > 0
   const canSubmit = phase === 'detect' ? Boolean(form.ip && form.ssh_username && hasCredentials) : phase === 'fingerprint' ? confirmHostKey : phase === 'test' ? Boolean(discovery?.host_key_fingerprint) : Boolean(form.name && testResult?.authentication_ok && testResult.privilege_ok && testResult.temp_write_ok)
 
@@ -112,7 +209,8 @@ export function ServerOnboardingDialog({ onClose }: Props): React.JSX.Element {
           {error && <ErrorPanel message={error} probableCause={discovery?.probable_cause ?? testResult?.probable_cause} />}
           {!discovery && <InfoPanel text="Detect is read-only. No installer, firewall rule or remote file is changed during this step." />}
           <button disabled={busy || !canSubmit} type="submit" className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 text-xs font-semibold text-slate-950 disabled:opacity-50 sm:col-span-2">{busy && <LoaderCircle size={14} className="animate-spin" />}{phase === 'detect' ? 'Detect server' : phase === 'fingerprint' ? 'Confirm fingerprint and continue' : phase === 'test' ? 'Test SSH connection' : 'Prepare server'}</button>
-          {discovery && <button type="button" disabled={busy} onClick={() => { setDiscovery(undefined); setTestResult(undefined); setConfirmHostKey(false); setPhase('detect') }} className="rounded-xl border border-line px-4 py-2.5 text-xs text-muted sm:col-span-2">Start a new discovery</button>}
+          {requestStartedAt && <p className="text-xs text-muted sm:col-span-2">{requestTimedOut ? 'Request timed out' : `Running for ${formatElapsed(Date.now() - requestStartedAt)}`}</p>}
+          {(discovery || requestTimedOut) && <button type="button" disabled={busy} onClick={resetDiscovery} className="rounded-xl border border-line px-4 py-2.5 text-xs text-muted sm:col-span-2">Start a new discovery</button>}
         </form></> : <ActiveOnboarding active={active} onboarding={onboarding} error={error ?? undefined} hasCredentials={hasCredentials} retry={retry} credentials={credentials} form={form} update={update} privateKey={privateKey} setPrivateKey={setPrivateKey} password={password} setPassword={setPassword} />}
       </div>
     </div>
@@ -122,7 +220,31 @@ export function ServerOnboardingDialog({ onClose }: Props): React.JSX.Element {
 function ActiveOnboarding({ active, onboarding, error, hasCredentials, retry, credentials, form, update, privateKey, setPrivateKey, password, setPassword }: { active: NonNullable<ReturnType<typeof useServerOnboarding>['onboarding']>; onboarding: ReturnType<typeof useServerOnboarding>; error?: string; hasCredentials: boolean; retry: () => Promise<void>; credentials: () => { auth_method: OnboardingStartRequest['auth_method']; password?: string; private_key?: string }; form: OnboardingStartRequest; update: <K extends keyof OnboardingStartRequest>(key: K, value: OnboardingStartRequest[K]) => void; privateKey: string; setPrivateKey: (value: string) => void; password: string; setPassword: (value: string) => void }): React.JSX.Element {
   const diagnosis = onboarding.diagnose.data
   const terminal = ['completed', 'failed', 'rollback_required', 'cancelled'].includes(active.status)
-  return <div className="mt-6"><OnboardingStepProgress steps={steps} activeStep={active.current_step} completedStep={active.last_successful_step} progress={active.progress_percent} />{error && <div className="mt-5"><ErrorPanel message={error} /></div>}<div className="mt-5"><CredentialSelector form={form} update={update} privateKey={privateKey} setPrivateKey={setPrivateKey} password={password} setPassword={setPassword} /></div><div className="mt-5 flex flex-wrap gap-2"><button type="button" disabled={!hasCredentials || onboarding.retry.isPending} onClick={() => { void retry() }} className="rounded-xl border border-line px-4 py-2.5 text-xs font-semibold text-copy disabled:opacity-50">{active.status === 'pending' ? 'Resume' : 'Retry'}</button>{!terminal && <button type="button" onClick={() => { void onboarding.cancel.mutateAsync() }} className="rounded-xl border border-line px-4 py-2.5 text-xs text-muted">Cancel</button>}<button type="button" disabled={onboarding.diagnose.isPending || !hasCredentials} onClick={() => { void onboarding.diagnose.mutateAsync({ id: active.id, payload: credentials() }) }} className="inline-flex items-center gap-2 rounded-xl border border-line px-4 py-2.5 text-xs font-semibold text-copy disabled:opacity-50"><ShieldCheck size={14} />Diagnose</button></div>{active.status === 'completed' && <p className="mt-5 flex items-center gap-2 text-sm text-success"><ServerCog size={16} />Server connected and ready for read-only monitoring.</p>}{onboarding.health && <OnboardingDiagnosticSummary checks={[{ label: 'SSH', value: onboarding.health.ssh }, { label: 'Node Exporter', value: onboarding.health.node_exporter }, { label: 'Prometheus', value: onboarding.health.prometheus_target_status ?? onboarding.health.prometheus }, { label: 'Firewall', value: onboarding.health.firewall }, { label: 'Metrics', value: onboarding.health.metrics_available ? 'available' : 'not_available' }, { label: 'Freshness', value: onboarding.health.freshness }]} />}{diagnosis && <OnboardingDiagnosticSummary checks={[{ label: 'Node Exporter', value: diagnosis.node_exporter }, { label: 'Prometheus', value: diagnosis.prometheus_target_status ?? diagnosis.prometheus }, { label: 'Firewall', value: diagnosis.firewall }, { label: 'Network', value: diagnosis.network }, { label: 'Latency', value: `${diagnosis.latency_ms ?? '—'} ms` }, { label: 'Last sample', value: diagnosis.last_sample ?? 'missing' }]} errors={diagnosis.errors} />}</div>
+  const canRetry = active.status === 'pending' || ['failed', 'rollback_required', 'cancelled'].includes(active.status)
+  const startedAt = Date.parse(active.started_at ?? active.created_at)
+  const elapsedSeconds = Number.isFinite(startedAt) ? Math.max(0, Math.floor((Date.now() - startedAt) / 1_000)) : 0
+  const timedOut = !terminal && elapsedSeconds >= JOB_VISUAL_TIMEOUT_SECONDS
+
+  return <div className="mt-6">
+    <OnboardingStepProgress steps={steps} activeStep={active.current_step} completedStep={active.last_successful_step} progress={active.progress_percent} />
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-panel-raised px-4 py-3 text-xs text-muted">
+      <span>Current step: <strong className="text-copy">{formatStep(active.current_step)}</strong></span>
+      <span>Status: <strong className="text-copy">{active.status}</strong> · elapsed {formatElapsed(elapsedSeconds * 1_000)}</span>
+    </div>
+    {timedOut && <div className="mt-4 rounded-xl border border-warning/30 bg-warning/10 p-3 text-sm text-warning">This job has exceeded the 30-second visual timeout. Refresh the status, cancel the job, or retry it after it reaches a terminal state.</div>}
+    {error && <div className="mt-5"><ErrorPanel message={error} /></div>}
+    <div className="mt-5"><CredentialSelector form={form} update={update} privateKey={privateKey} setPrivateKey={setPrivateKey} password={password} setPassword={setPassword} /></div>
+    <div className="mt-5 flex flex-wrap gap-2">
+      {canRetry && <button type="button" disabled={!hasCredentials || onboarding.retry.isPending} onClick={() => { void retry().catch(() => undefined) }} className="rounded-xl border border-line px-4 py-2.5 text-xs font-semibold text-copy disabled:opacity-50">Retry Job</button>}
+      {!terminal && <button type="button" disabled={onboarding.cancel.isPending} onClick={() => { void onboarding.cancel.mutateAsync().catch(() => undefined) }} className="rounded-xl border border-line px-4 py-2.5 text-xs text-muted disabled:opacity-50">Cancel Job</button>}
+      <button type="button" disabled={onboarding.isFetching} onClick={() => { void onboarding.refetch().catch(() => undefined) }} className="rounded-xl border border-line px-4 py-2.5 text-xs text-muted disabled:opacity-50">Force Refresh Status</button>
+      <button type="button" disabled={onboarding.diagnose.isPending || !hasCredentials} onClick={() => { void onboarding.diagnose.mutateAsync({ id: active.id, payload: credentials() }).catch(() => undefined) }} className="inline-flex items-center gap-2 rounded-xl border border-line px-4 py-2.5 text-xs font-semibold text-copy disabled:opacity-50"><ShieldCheck size={14} />Diagnose</button>
+    </div>
+    {onboarding.isFetching && <p className="mt-3 text-xs text-muted">Refreshing onboarding status…</p>}
+    {active.status === 'completed' && <p className="mt-5 flex items-center gap-2 text-sm text-success"><ServerCog size={16} />Server connected and ready for read-only monitoring.</p>}
+    {onboarding.health && <OnboardingDiagnosticSummary checks={[{ label: 'SSH', value: onboarding.health.ssh }, { label: 'Node Exporter', value: onboarding.health.node_exporter }, { label: 'Prometheus', value: onboarding.health.prometheus_target_status ?? onboarding.health.prometheus }, { label: 'Firewall', value: onboarding.health.firewall }, { label: 'Metrics', value: onboarding.health.metrics_available ? 'available' : 'not_available' }, { label: 'Freshness', value: onboarding.health.freshness }]} />}
+    {diagnosis && <OnboardingDiagnosticSummary checks={[{ label: 'Node Exporter', value: diagnosis.node_exporter }, { label: 'Prometheus', value: diagnosis.prometheus_target_status ?? diagnosis.prometheus }, { label: 'Firewall', value: diagnosis.firewall }, { label: 'Network', value: diagnosis.network }, { label: 'Latency', value: `${diagnosis.latency_ms ?? '—'} ms` }, { label: 'Last sample', value: diagnosis.last_sample ?? 'missing' }]} errors={diagnosis.errors} />}
+  </div>
 }
 
 function ReviewPanel({ discovery, confirmHostKey, setConfirmHostKey }: { discovery: OnboardingDiscoveryResponse; confirmHostKey: boolean; setConfirmHostKey: (value: boolean) => void }): React.JSX.Element {
@@ -156,4 +278,24 @@ function Field({ label, value, onChange, type = 'text', required = false, autoCo
 
 function selectedCapacity(choice: string, custom: string): number | undefined {
   return choice === 'custom' ? (custom ? Number(custom) : undefined) : Number(choice)
+}
+
+function formatElapsed(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1_000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`
+}
+
+function formatStep(step: string): string {
+  return step.replaceAll('_', ' ')
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : 'La solicitud de onboarding no pudo completarse.'
+}
+
+function mutationError(error: Error | null): string | undefined {
+  if (!error || error.name === 'AbortError' || error.name === 'CanceledError') return undefined
+  return error.message || 'La solicitud de onboarding no pudo completarse.'
 }
