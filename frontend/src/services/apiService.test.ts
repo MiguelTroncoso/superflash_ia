@@ -84,6 +84,21 @@ describe('apiService', () => {
     expect(get).toHaveBeenNthCalledWith(4, '/api/v1/recommendations', undefined)
   })
 
+  it('uses the protected delete contract with explicit identity confirmation', async () => {
+    const get = vi.spyOn(httpClient, 'get').mockResolvedValue({ data: [] } as never)
+    const deleteRequest = vi.spyOn(httpClient, 'delete').mockResolvedValue({ data: { action: 'archived' } } as never)
+
+    await apiService.getActiveOnboardings()
+    await apiService.getServerDeletionImpact(7)
+    await apiService.deleteServer(7, { confirmation: 'Live 1', hostname: 'server.example' })
+
+    expect(get).toHaveBeenNthCalledWith(1, '/api/v1/onboarding/active', undefined)
+    expect(get).toHaveBeenNthCalledWith(2, '/api/v1/servers/7/deletion-impact', undefined)
+    expect(deleteRequest).toHaveBeenCalledWith('/api/v1/servers/7', {
+      data: { confirmation: 'Live 1', hostname: 'server.example' },
+    })
+  })
+
   it('keeps health on the public endpoint outside /api/v1', async () => {
     const get = vi.spyOn(httpClient, 'get').mockResolvedValue({
       data: { status: 'ok', database: 'ok', version: 'test' },

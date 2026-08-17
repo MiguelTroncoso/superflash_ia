@@ -20,7 +20,13 @@ from app.models.onboarding import (
     ServerInventorySnapshot,
     ServerOnboarding,
 )
-from app.models.server import Server, ServerMetric, ServerOperationalStatus, ServerRole
+from app.models.server import (
+    Server,
+    ServerLifecycleState,
+    ServerMetric,
+    ServerOperationalStatus,
+    ServerRole,
+)
 
 __all__ = [
     "Alert",
@@ -38,6 +44,7 @@ __all__ = [
     "OnboardingAuditEvent",
     "Server",
     "ServerInventorySnapshot",
+    "ServerLifecycleState",
     "ServerMetric",
     "ServerOnboarding",
     "ServerOperationalStatus",

@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 from app.models import Server, ServerMetric, ServerRole
+from app.models.onboarding import ServerOnboarding
 
 
 def _seed_server_with_metrics(session) -> Server:
@@ -141,9 +142,86 @@ def test_server_inventory_crud_does_not_return_prometheus_token(client):
     assert listed.status_code == 200
     assert any(item["id"] == server_id for item in listed.json()["items"])
 
-    deleted = client.delete(f"/api/v1/servers/{server_id}")
-    assert deleted.status_code == 204
+    deleted = client.request(
+        "DELETE",
+        f"/api/v1/servers/{server_id}",
+        json={"confirmation": "Servidor actualizado", "hostname": "crud.example.internal"},
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["action"] == "deleted"
     assert client.get(f"/api/v1/servers/{server_id}").status_code == 404
+
+
+def test_server_delete_requires_explicit_confirmation(client, session):
+    server = _seed_server_with_metrics(session)
+
+    impact = client.get(f"/api/v1/servers/{server.id}/deletion-impact")
+    assert impact.status_code == 200
+    assert impact.json()["can_hard_delete"] is False
+
+    rejected = client.request(
+        "DELETE",
+        f"/api/v1/servers/{server.id}",
+        json={"confirmation": "invalid", "hostname": server.hostname},
+    )
+    assert rejected.status_code == 400
+
+    archived = client.request(
+        "DELETE",
+        f"/api/v1/servers/{server.id}",
+        json={"confirmation": server.name, "hostname": server.hostname},
+    )
+    assert archived.status_code == 200
+    assert archived.json()["action"] == "archived"
+    assert client.get("/api/v1/servers").json()["total"] == 0
+    assert client.get(f"/api/v1/servers/{server.id}").json()["lifecycle_state"] == "archived"
+    assert client.get(f"/api/v1/servers/{server.id}/metrics").json()
+
+
+def test_test_server_delete_cancels_orphan_onboarding_job(client, session):
+    server = Server(
+        external_id="srv-orphan",
+        name="Orphan test server",
+        hostname="198.51.100.20",
+        role=ServerRole.OTHER,
+    )
+    session.add(server)
+    session.flush()
+    session.add(
+        ServerOnboarding(
+            server_id=server.id,
+            status="discovering",
+            current_step="discovering",
+            progress_percent=25,
+            created_by="test",
+            auth_method="password",
+            ssh_port=22,
+            ssh_username="root",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+    )
+    session.commit()
+
+    deleted = client.request(
+        "DELETE",
+        f"/api/v1/servers/{server.id}",
+        json={"confirmation": server.name, "hostname": server.hostname},
+    )
+
+    assert deleted.status_code == 200
+    assert deleted.json()["action"] == "archived"
+    assert deleted.json()["cancelled_onboarding_jobs"] == 1
+    assert client.get(f"/api/v1/servers/{server.id}").json()["lifecycle_state"] == "archived"
+
+    cleaned = client.request(
+        "DELETE",
+        f"/api/v1/servers/{server.id}",
+        json={"confirmation": server.name, "hostname": server.hostname},
+    )
+    assert cleaned.status_code == 200
+    assert cleaned.json()["action"] == "deleted"
+    assert client.get(f"/api/v1/servers/{server.id}").status_code == 404
 
 
 def test_server_inventory_rejects_duplicate_external_id(client):

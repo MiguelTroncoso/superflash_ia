@@ -1,6 +1,7 @@
 export type ApiHealthStatus = 'ok' | 'degraded'
 
 export type ApiServerRole = 'main' | 'live' | 'vod' | 'other'
+export type ApiServerLifecycleState = 'active' | 'archived' | 'deleted'
 
 export type ApiAlertType =
   | 'high_cpu'
@@ -88,6 +89,8 @@ export interface ServerResponse {
   heartbeat_interval_seconds: number
   last_heartbeat_at: string | null
   status: 'online' | 'degraded' | 'offline' | 'unknown' | 'maintenance'
+  lifecycle_state?: ApiServerLifecycleState
+  archived_at?: string | null
   notes: string | null
   enabled: boolean
   created_at: string
@@ -324,6 +327,38 @@ export interface OnboardingResponse {
   cancel_requested: boolean
   created_at: string
   updated_at: string
+}
+
+export interface OnboardingActiveResponse extends OnboardingResponse {
+  server_name: string
+  server_hostname: string | null
+}
+
+export interface ServerRelationSummary {
+  metrics: number
+  alerts: number
+  inventory_snapshots: number
+  onboarding_jobs: number
+  non_cancelled_onboarding_jobs: number
+  onboarding_audit_events: number
+  assigned_channels: number
+  channel_metrics: number
+  category_history: number
+  cost_records: number
+  simulation_records: number
+}
+
+export interface ServerDeletionImpact {
+  server_id: number
+  name: string
+  hostname: string | null
+  relations: ServerRelationSummary
+  can_hard_delete: boolean
+}
+
+export interface ServerDeletionResponse extends ServerDeletionImpact {
+  action: 'deleted' | 'archived'
+  cancelled_onboarding_jobs: number
 }
 
 export interface OnboardingAuditResponse {

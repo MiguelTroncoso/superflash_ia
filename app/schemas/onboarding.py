@@ -236,6 +236,13 @@ class OnboardingRead(BaseModel):
     updated_at: datetime
 
 
+class OnboardingActiveRead(OnboardingRead):
+    """Job activo que puede ser reanudado por el operador."""
+
+    server_name: str
+    server_hostname: str | None
+
+
 class OnboardingAuditRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

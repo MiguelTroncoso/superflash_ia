@@ -6,6 +6,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.onboarding import OnboardingAuditEvent, ServerInventorySnapshot, ServerOnboarding
+from app.models.server import Server
+
+ACTIVE_ONBOARDING_STATUSES = (
+    "pending",
+    "connecting",
+    "authenticating",
+    "discovering",
+    "installing_exporter",
+    "configuring_firewall",
+    "verifying_exporter",
+    "registering_inventory",
+    "configuring_monitoring",
+    "validating",
+)
 
 
 class OnboardingRepository:
@@ -31,24 +45,22 @@ class OnboardingRepository:
             select(ServerOnboarding)
             .where(
                 ServerOnboarding.server_id == server_id,
-                ServerOnboarding.status.in_(
-                    [
-                        "pending",
-                        "connecting",
-                        "authenticating",
-                        "discovering",
-                        "installing_exporter",
-                        "configuring_firewall",
-                        "verifying_exporter",
-                        "registering_inventory",
-                        "configuring_monitoring",
-                        "validating",
-                    ]
-                ),
+                ServerOnboarding.status.in_(ACTIVE_ONBOARDING_STATUSES),
             )
             .limit(1)
         )
         return self._session.scalars(stmt).first()
+
+    def active_all(self) -> list[tuple[ServerOnboarding, Server]]:
+        """Devuelve jobs activos junto con identidad pública del servidor."""
+
+        stmt = (
+            select(ServerOnboarding, Server)
+            .join(Server, Server.id == ServerOnboarding.server_id)
+            .where(ServerOnboarding.status.in_(ACTIVE_ONBOARDING_STATUSES))
+            .order_by(ServerOnboarding.created_at.desc(), ServerOnboarding.id.desc())
+        )
+        return [(row[0], row[1]) for row in self._session.execute(stmt).all()]
 
     def create(self, onboarding: ServerOnboarding) -> ServerOnboarding:
         self._session.add(onboarding)

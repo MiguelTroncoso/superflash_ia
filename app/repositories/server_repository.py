@@ -1,6 +1,6 @@
 """Acceso a datos de servidores y sus métricas."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import Select, and_, desc, func, or_, select
@@ -9,7 +9,22 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.adapters.base import ServerSnapshot
 from app.models.alert import Alert, AlertStatus
-from app.models.server import Server, ServerMetric
+from app.models.channel import Channel, ChannelCategoryHistory, ChannelMetric
+from app.models.onboarding import OnboardingAuditEvent, ServerInventorySnapshot, ServerOnboarding
+from app.models.server import Server, ServerLifecycleState, ServerMetric
+
+ACTIVE_ONBOARDING_STATUSES = (
+    "pending",
+    "connecting",
+    "authenticating",
+    "discovering",
+    "installing_exporter",
+    "configuring_firewall",
+    "verifying_exporter",
+    "registering_inventory",
+    "configuring_monitoring",
+    "validating",
+)
 
 
 class ServerRepository:
@@ -20,7 +35,11 @@ class ServerRepository:
 
     def list_all(self) -> list[Server]:
         """Devuelve todos los servidores ordenados por nombre."""
-        stmt = select(Server).order_by(Server.name)
+        stmt = (
+            select(Server)
+            .where(Server.lifecycle_state == ServerLifecycleState.ACTIVE)
+            .order_by(Server.name)
+        )
         return list(self._session.scalars(stmt))
 
     def list_page(
@@ -33,6 +52,7 @@ class ServerRepository:
         provider: str | None = None,
         group: str | None = None,
         enabled: bool | None = None,
+        lifecycle_state: str = ServerLifecycleState.ACTIVE.value,
         sort_by: str = "name",
         sort_order: str = "asc",
     ) -> tuple[list[tuple[Server, ServerMetric | None, int]], int]:
@@ -47,6 +67,7 @@ class ServerRepository:
             provider=provider,
             group=group,
             enabled=enabled,
+            lifecycle_state=lifecycle_state,
         )
         total = self._session.scalar(select(func.count(Server.id)).where(*filters)) or 0
 
@@ -98,6 +119,7 @@ class ServerRepository:
         provider: str | None,
         group: str | None,
         enabled: bool | None,
+        lifecycle_state: str | None,
     ) -> list[ColumnElement[bool]]:
         filters: list[ColumnElement[bool]] = []
         if search:
@@ -118,6 +140,8 @@ class ServerRepository:
             filters.append(Server.group == group)
         if enabled is not None:
             filters.append(Server.enabled.is_(enabled))
+        if lifecycle_state != "all":
+            filters.append(Server.lifecycle_state == lifecycle_state)
         return filters
 
     @staticmethod
@@ -162,6 +186,124 @@ class ServerRepository:
         """Busca un servidor por su identificador externo."""
         stmt = select(Server).where(Server.external_id == external_id)
         return self._session.scalars(stmt).first()
+
+    def relation_summary(self, server: Server) -> dict[str, int]:
+        """Cuenta relaciones antes de retirar un servidor.
+
+        Las consultas son agregados constantes y no cargan históricos en
+        memoria. Los dominios de simulación no existen en este esquema aún,
+        por lo que se reportan explícitamente como cero.
+        """
+
+        def count(stmt: Any) -> int:
+            return int(self._session.scalar(stmt) or 0)
+
+        return {
+            "metrics": count(
+                select(func.count())
+                .select_from(ServerMetric)
+                .where(ServerMetric.server_id == server.id)
+            ),
+            "alerts": count(
+                select(func.count()).select_from(Alert).where(Alert.server_id == server.id)
+            ),
+            "inventory_snapshots": count(
+                select(func.count())
+                .select_from(ServerInventorySnapshot)
+                .where(ServerInventorySnapshot.server_id == server.id)
+            ),
+            "onboarding_jobs": count(
+                select(func.count())
+                .select_from(ServerOnboarding)
+                .where(ServerOnboarding.server_id == server.id)
+            ),
+            "non_cancelled_onboarding_jobs": count(
+                select(func.count())
+                .select_from(ServerOnboarding)
+                .where(
+                    ServerOnboarding.server_id == server.id,
+                    ServerOnboarding.status != "cancelled",
+                )
+            ),
+            "onboarding_audit_events": count(
+                select(func.count())
+                .select_from(OnboardingAuditEvent)
+                .where(OnboardingAuditEvent.server_id == server.id)
+            ),
+            "assigned_channels": count(
+                select(func.count())
+                .select_from(Channel)
+                .where(Channel.current_server_id == server.id)
+            ),
+            "channel_metrics": count(
+                select(func.count())
+                .select_from(ChannelMetric)
+                .where(ChannelMetric.server_id == server.id)
+            ),
+            "category_history": count(
+                select(func.count())
+                .select_from(ChannelCategoryHistory)
+                .join(Channel, Channel.id == ChannelCategoryHistory.channel_id)
+                .where(Channel.current_server_id == server.id)
+            ),
+            "cost_records": int(server.monthly_cost is not None),
+            "simulation_records": 0,
+        }
+
+    @staticmethod
+    def can_hard_delete(relations: dict[str, int]) -> bool:
+        """Solo permite borrar registros sin histórico productivo."""
+
+        protected = (
+            "metrics",
+            "alerts",
+            "inventory_snapshots",
+            "non_cancelled_onboarding_jobs",
+            "assigned_channels",
+            "channel_metrics",
+            "category_history",
+            "cost_records",
+            "simulation_records",
+        )
+        return all(relations[name] == 0 for name in protected)
+
+    def cancel_active_onboardings(self, server_id: int, actor: str) -> int:
+        """Terminaliza jobs activos antes de retirar un servidor de prueba."""
+
+        stmt = select(ServerOnboarding).where(
+            ServerOnboarding.server_id == server_id,
+            ServerOnboarding.status.in_(ACTIVE_ONBOARDING_STATUSES),
+        )
+        jobs = list(self._session.scalars(stmt))
+        now = datetime.now(UTC)
+        for onboarding in jobs:
+            onboarding.status = "cancelled"
+            onboarding.cancel_requested = True
+            onboarding.last_error_code = "cancelled"
+            onboarding.last_error_message_sanitized = "Onboarding cancelado por el operador."
+            onboarding.updated_at = now
+            self._session.add(
+                OnboardingAuditEvent(
+                    onboarding_id=onboarding.id,
+                    server_id=server_id,
+                    actor=actor,
+                    event="cancelled_for_server_removal",
+                    step=onboarding.current_step,
+                    success=False,
+                    detail_sanitized="Job de onboarding cancelado antes de retirar el servidor.",
+                    created_at=now,
+                )
+            )
+        self._session.flush()
+        return len(jobs)
+
+    def archive(self, server: Server) -> None:
+        """Retira un servidor sin borrar sus datos históricos."""
+
+        server.lifecycle_state = ServerLifecycleState.ARCHIVED
+        server.archived_at = datetime.now(UTC)
+        server.enabled = False
+        self._session.flush()
 
     def create(self, fields: dict[str, object]) -> Server:
         """Crea un servidor administrado desde el inventario."""

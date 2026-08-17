@@ -22,7 +22,10 @@ import type {
   MaintenanceAction,
   MaintenanceResponse,
   OnboardingResponse,
+  OnboardingActiveResponse,
   OnboardingStartRequest,
+  ServerDeletionImpact,
+  ServerDeletionResponse,
 } from '../types/api'
 
 const API_V1_PREFIX = '/api/v1'
@@ -76,6 +79,13 @@ export const apiService = {
     getData(`${API_V1_PREFIX}/servers`, params),
   getServer: (serverId: number): Promise<ServerResponse> =>
     getData(`${API_V1_PREFIX}/servers/${serverId}`),
+  getServerDeletionImpact: (serverId: number): Promise<ServerDeletionImpact> =>
+    getData(`${API_V1_PREFIX}/servers/${serverId}/deletion-impact`),
+  deleteServer: (
+    serverId: number,
+    payload: { confirmation: string; hostname?: string | null },
+  ): Promise<ServerDeletionResponse> =>
+    httpClient.delete<ServerDeletionResponse>(`${API_V1_PREFIX}/servers/${serverId}`, { data: payload }).then(({ data }) => data),
   getServerMetrics: (serverId: number, limit = 1): Promise<ServerMetricResponse[]> =>
     getData(`${API_V1_PREFIX}/servers/${serverId}/metrics`, { limit }),
   getChannels: (params?: ChannelListParams): Promise<ChannelPageResponse> =>
@@ -97,6 +107,8 @@ export const apiService = {
     postData<OnboardingTestSSHResponse>(`${API_V1_PREFIX}/onboarding/test-ssh`, payload, signal),
   getOnboarding: (onboardingId: number): Promise<OnboardingResponse> =>
     getData(`${API_V1_PREFIX}/onboarding/${onboardingId}`),
+  getActiveOnboardings: (): Promise<OnboardingActiveResponse[]> =>
+    getData(`${API_V1_PREFIX}/onboarding/active`),
   getOnboardingAudit: (onboardingId: number): Promise<OnboardingAuditResponse[]> =>
     getData(`${API_V1_PREFIX}/onboarding/${onboardingId}/audit`),
   getOnboardingHealth: (onboardingId: number): Promise<OnboardingHealthResponse> =>

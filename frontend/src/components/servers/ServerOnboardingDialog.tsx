@@ -1,6 +1,6 @@
 import { LoaderCircle, ServerCog, ShieldCheck, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useServerOnboarding } from '../../hooks/useServerOnboarding'
+import { useActiveOnboardings, useServerOnboarding } from '../../hooks/useServerOnboarding'
 import type { OnboardingDiscoveryResponse, OnboardingStartRequest, OnboardingTestSSHResponse } from '../../types/api'
 import { OnboardingDiagnosticSummary } from './OnboardingDiagnosticSummary'
 import { OnboardingStepProgress } from './OnboardingStepProgress'
@@ -47,13 +47,30 @@ export function ServerOnboardingDialog({ onClose }: Props): React.JSX.Element {
   const requestRef = useRef<{ kind: RequestKind; generation: number; controller: AbortController } | undefined>(undefined)
   const requestTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const onboarding = useServerOnboarding(onboardingId)
+  const activeJobs = useActiveOnboardings()
   const active = onboarding.onboarding
   const busy = requestStartedAt !== null && !requestTimedOut
+  const runningStep = requestRef.current?.kind === 'test_ssh'
+    ? 'test_ssh'
+    : requestRef.current?.kind === 'start'
+      ? 'registering_inventory'
+      : 'discovering'
+  const progressStep = busy
+    ? runningStep
+    : discovery
+      ? phase === 'fingerprint' ? 'discovering' : phase === 'test' ? 'test_ssh' : 'registering_inventory'
+      : null
+  const progress = busy
+    ? requestRef.current?.kind === 'test_ssh' ? 30 : requestRef.current?.kind === 'start' ? 40 : 5
+    : discovery
+      ? phase === 'fingerprint' ? 20 : phase === 'test' ? 30 : 40
+      : 0
 
   useEffect(() => {
+    if (requestStartedAt === null && onboardingId === null) return undefined
     const timer = setInterval(() => setClock(Date.now()), 1_000)
     return () => clearInterval(timer)
-  }, [])
+  }, [onboardingId, requestStartedAt])
 
   useEffect(() => () => {
     requestRef.current?.controller.abort()
@@ -94,9 +111,13 @@ export function ServerOnboardingDialog({ onClose }: Props): React.JSX.Element {
     setRequestStartedAt(null)
     setRequestTimedOut(false)
     setRequestError(null)
+    setOnboardingId(null)
     setDiscovery(undefined)
     setTestResult(undefined)
     setConfirmHostKey(false)
+    setPrivateKey('')
+    setPassword('')
+    setForm((current) => ({ ...current, network_interface: undefined, host_key_fingerprint: '' }))
     setPhase('detect')
   }
 
@@ -106,6 +127,25 @@ export function ServerOnboardingDialog({ onClose }: Props): React.JSX.Element {
 
   function update<K extends keyof OnboardingStartRequest>(key: K, value: OnboardingStartRequest[K]): void {
     setForm((current) => ({ ...current, [key]: value }))
+  }
+
+  function resumeExisting(job: (typeof activeJobs.jobs)[number]): void {
+    setOnboardingId(job.id)
+    setPhase('prepare')
+    setRequestStartedAt(null)
+    setRequestTimedOut(false)
+    setRequestError(null)
+    setDiscovery(undefined)
+    setTestResult(undefined)
+    setConfirmHostKey(false)
+    setForm((current) => ({
+      ...current,
+      name: job.server_name,
+      ip: job.server_hostname ?? '',
+      ssh_port: job.ssh_port,
+      ssh_username: job.ssh_username,
+      auth_method: job.auth_method,
+    }))
   }
 
   function credentials(): { auth_method: OnboardingStartRequest['auth_method']; password?: string; private_key?: string } {
@@ -197,7 +237,7 @@ export function ServerOnboardingDialog({ onClose }: Props): React.JSX.Element {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
       <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl border border-line bg-panel p-6 shadow-2xl">
         <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand">Secure onboarding</p><h2 className="mt-2 text-xl font-semibold text-copy">Detect and prepare a server</h2><p className="mt-2 text-sm text-muted">Detect → confirm fingerprint → test SSH → prepare. Credentials stay in memory and are never returned or persisted.</p></div><button type="button" onClick={onClose} className="rounded-lg p-2 text-muted hover:bg-panel-raised hover:text-copy" aria-label="Close"><X size={18} /></button></div>
-        {!active ? <><div className="mt-6"><OnboardingStepProgress steps={steps} activeStep={phase === 'detect' || phase === 'fingerprint' ? 'discovering' : phase === 'test' ? 'test_ssh' : 'registering_inventory'} progress={phase === 'detect' ? 5 : phase === 'fingerprint' ? 20 : phase === 'test' ? 30 : 40} /></div><form className="mt-6 grid gap-4 sm:grid-cols-2" onSubmit={(event) => { void submit(event) }}>
+        {!active ? <><div className="mt-6"><OnboardingStepProgress steps={steps} activeStep={progressStep} progress={progress} /></div><form className="mt-6 grid gap-4 sm:grid-cols-2" onSubmit={(event) => { void submit(event) }}>
           <Field label="Server name" value={form.name} required onChange={(value) => update('name', value)} />
           <Field label="IP or hostname" value={form.ip} required onChange={(value) => update('ip', value)} />
           <Field label="SSH user" value={form.ssh_username} required onChange={(value) => update('ssh_username', value)} />
@@ -208,6 +248,7 @@ export function ServerOnboardingDialog({ onClose }: Props): React.JSX.Element {
           {phase === 'prepare' && <PrepareFields form={form} update={update} capacityChoice={capacityChoice} setCapacityChoice={setCapacityChoice} customCapacity={customCapacity} setCustomCapacity={setCustomCapacity} />}
           {error && <ErrorPanel message={error} probableCause={discovery?.probable_cause ?? testResult?.probable_cause} />}
           {!discovery && <InfoPanel text="Detect is read-only. No installer, firewall rule or remote file is changed during this step." />}
+          {activeJobs.jobs.length > 0 && !discovery && <ResumeJobs jobs={activeJobs.jobs} onResume={resumeExisting} />}
           <button disabled={busy || !canSubmit} type="submit" className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 text-xs font-semibold text-slate-950 disabled:opacity-50 sm:col-span-2">{busy && <LoaderCircle size={14} className="animate-spin" />}{phase === 'detect' ? 'Detect server' : phase === 'fingerprint' ? 'Confirm fingerprint and continue' : phase === 'test' ? 'Test SSH connection' : 'Prepare server'}</button>
           {requestStartedAt && <p className="text-xs text-muted sm:col-span-2">{requestTimedOut ? 'Request timed out' : `Running for ${formatElapsed(Date.now() - requestStartedAt)}`}</p>}
           {(discovery || requestTimedOut) && <button type="button" disabled={busy} onClick={resetDiscovery} className="rounded-xl border border-line px-4 py-2.5 text-xs text-muted sm:col-span-2">Start a new discovery</button>}
@@ -215,6 +256,10 @@ export function ServerOnboardingDialog({ onClose }: Props): React.JSX.Element {
       </div>
     </div>
   )
+}
+
+function ResumeJobs({ jobs, onResume }: { jobs: ReturnType<typeof useActiveOnboardings>['jobs']; onResume: (job: (typeof jobs)[number]) => void }): React.JSX.Element {
+  return <div className="rounded-xl border border-warning/30 bg-warning/10 p-4 text-xs sm:col-span-2"><p className="font-semibold text-copy">Resume existing onboarding</p><p className="mt-1 text-muted">A confirmed backend onboarding is still active. Resume it instead of creating a duplicate discovery.</p><div className="mt-3 grid gap-2">{jobs.map((job) => <button key={job.id} type="button" onClick={() => onResume(job)} className="flex items-center justify-between rounded-lg border border-line bg-panel px-3 py-2 text-left hover:border-brand"><span><strong className="block text-copy">{job.server_name}</strong><span className="text-muted">{job.server_hostname ?? 'Host unavailable'} · {job.status}</span></span><span className="font-semibold text-brand">Resume</span></button>)}</div></div>
 }
 
 function ActiveOnboarding({ active, onboarding, error, hasCredentials, retry, credentials, form, update, privateKey, setPrivateKey, password, setPassword }: { active: NonNullable<ReturnType<typeof useServerOnboarding>['onboarding']>; onboarding: ReturnType<typeof useServerOnboarding>; error?: string; hasCredentials: boolean; retry: () => Promise<void>; credentials: () => { auth_method: OnboardingStartRequest['auth_method']; password?: string; private_key?: string }; form: OnboardingStartRequest; update: <K extends keyof OnboardingStartRequest>(key: K, value: OnboardingStartRequest[K]) => void; privateKey: string; setPrivateKey: (value: string) => void; password: string; setPassword: (value: string) => void }): React.JSX.Element {
