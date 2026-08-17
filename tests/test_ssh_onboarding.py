@@ -1,11 +1,13 @@
 import base64
 import hashlib
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import paramiko
 import pytest
 
 from app.core.config import Settings
+from app.models import Server, ServerRole
 from app.models.onboarding import ServerOnboarding
 from app.schemas.onboarding import OnboardingStartRequest, OnboardingTestSSHRequest
 from app.services.onboarding_service import OnboardingService
@@ -309,3 +311,30 @@ def test_ssh_command_has_a_bounded_wait_for_remote_exit() -> None:
         session.run(SSHOperation.DETECT_INVENTORY)
 
     assert error.value.code == "command_timeout"
+
+
+def test_stale_onboarding_is_terminalized_when_status_is_polled(client, session) -> None:
+    server = Server(external_id="stale-job", name="Stale job", role=ServerRole.OTHER)
+    session.add(server)
+    session.flush()
+    stale_at = datetime.now(UTC) - timedelta(hours=2)
+    onboarding = ServerOnboarding(
+        server_id=server.id,
+        status="discovering",
+        current_step="discovering",
+        progress_percent=25,
+        created_by="test",
+        auth_method="password",
+        ssh_port=22,
+        ssh_username="root",
+        created_at=stale_at,
+        updated_at=stale_at,
+    )
+    session.add(onboarding)
+    session.commit()
+
+    response = client.get(f"/api/v1/onboarding/{onboarding.id}")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["last_error_code"] == "job_expired"

@@ -4,6 +4,7 @@ import { apiService } from '../services/apiService'
 import type {
   MaintenanceAction,
   MaintenanceResponse,
+  OnboardingActiveResponse,
   OnboardingDiagnosisResponse,
   OnboardingDiscoveryRequest,
   OnboardingDiscoveryResponse,
@@ -13,6 +14,25 @@ import type {
   OnboardingTestSSHRequest,
   OnboardingTestSSHResponse,
 } from '../types/api'
+
+export function useActiveOnboardings(): {
+  jobs: OnboardingActiveResponse[]
+  isLoading: boolean
+  isError: boolean
+} {
+  const query = useQuery({
+    queryKey: ['onboarding-active'],
+    queryFn: apiService.getActiveOnboardings,
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  })
+  return {
+    jobs: query.data ?? [],
+    isLoading: query.isPending,
+    isError: query.isError,
+  }
+}
 
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'rollback_required'])
 type CredentialPayload = Pick<OnboardingStartRequest, 'auth_method' | 'password' | 'private_key'>

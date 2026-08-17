@@ -1,5 +1,6 @@
 import {
   Activity,
+  Archive,
   ArrowLeft,
   Clock3,
   HardDrive,
@@ -12,6 +13,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Link, useParams } from 'react-router'
+import { useNavigate } from 'react-router'
 import { useState } from 'react'
 import { PageHeader } from '../../components/common/PageHeader'
 import { StatusBadge } from '../../components/common/StatusBadge'
@@ -21,6 +23,7 @@ import { DashboardState } from '../../components/dashboard/DashboardState'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useServerDetailData } from '../../hooks/useServerDetailData'
 import { useServerOnboarding } from '../../hooks/useServerOnboarding'
+import { ServerDeletionDialog } from '../../components/servers/ServerDeletionDialog'
 import { formatDateTime, formatNullablePercent, formatNullableThroughput, formatUptime } from '../../utils/formatters'
 import type { AlertResponse, MaintenanceAction } from '../../types/api'
 import type { HealthState } from '../../types/monitoring'
@@ -29,6 +32,7 @@ export function ServerDetailPage(): React.JSX.Element {
   usePageTitle('Server detail')
   const { serverId } = useParams()
   const id = Number(serverId)
+  const navigate = useNavigate()
   const data = useServerDetailData(Number.isInteger(id) ? id : 0)
   const maintenance = useServerOnboarding(null)
   const [maintenanceOpen, setMaintenanceOpen] = useState(false)
@@ -36,6 +40,7 @@ export function ServerDetailPage(): React.JSX.Element {
   const [privateKey, setPrivateKey] = useState('')
   const [password, setPassword] = useState('')
   const [targetVersion, setTargetVersion] = useState('')
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   if (data.isLoading) {
     return <DashboardState state="loading" message="Loading server detail and read-only metrics." />
@@ -56,7 +61,7 @@ export function ServerDetailPage(): React.JSX.Element {
         eyebrow="Infrastructure detail"
         title={data.server.name}
         description={`${data.server.hostname ?? data.server.external_id} · ${data.server.provider ?? 'Provider not configured'} · ${data.server.country ?? 'Country not configured'}`}
-        action={<StatusBadge state={state} label={data.server.status} />}
+        action={<div className="flex flex-wrap items-center gap-2"><StatusBadge state={state} label={data.server.status} /><button type="button" onClick={() => setDeleteOpen(true)} className="inline-flex items-center gap-2 rounded-xl border border-danger/40 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/10"><Archive size={14} />Archive / Delete</button></div>}
       />
       <DashboardFreshness
         isFetching={data.isFetching}
@@ -71,6 +76,7 @@ export function ServerDetailPage(): React.JSX.Element {
         </div>
         {maintenanceOpen && <MaintenanceForm authMethod={authMethod} setAuthMethod={setAuthMethod} privateKey={privateKey} setPrivateKey={setPrivateKey} password={password} setPassword={setPassword} targetVersion={targetVersion} setTargetVersion={setTargetVersion} busy={maintenance.maintenance.isPending} result={maintenance.maintenance.data?.message} error={Boolean(maintenance.maintenance.error)} onAction={(action) => { void runMaintenance(action) }} />}
       </Surface>
+      {deleteOpen && <ServerDeletionDialog server={data.server} onClose={() => setDeleteOpen(false)} onDeleted={(result) => { setDeleteOpen(false); navigate('/servers', { replace: true, state: { notice: result.action === 'deleted' ? 'Server deleted.' : 'Server archived; history preserved.' } }) }} />}
       {data.isEmpty ? (
         <DashboardState state="empty" message="This server has no collected metric samples yet. No synthetic values are shown." />
       ) : (

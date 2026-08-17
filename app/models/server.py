@@ -58,6 +58,14 @@ class ServerOperationalStatus(enum.StrEnum):
     MAINTENANCE = "maintenance"
 
 
+class ServerLifecycleState(enum.StrEnum):
+    """Estado de ciclo de vida del registro de inventario."""
+
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+    DELETED = "deleted"
+
+
 class Server(Base):
     """Servidor físico o virtual monitoreado."""
 
@@ -126,6 +134,18 @@ class Server(Base):
         default=ServerOperationalStatus.UNKNOWN,
         index=True,
     )
+    lifecycle_state: Mapped[ServerLifecycleState] = mapped_column(
+        Enum(
+            ServerLifecycleState,
+            native_enum=False,
+            length=20,
+            values_callable=lambda e: [member.value for member in e],
+        ),
+        default=ServerLifecycleState.ACTIVE,
+        server_default=ServerLifecycleState.ACTIVE.value,
+        index=True,
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(String(2000))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

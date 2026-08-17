@@ -4,7 +4,12 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.server import ServerOperationalStatus, ServerProfile, ServerRole
+from app.models.server import (
+    ServerLifecycleState,
+    ServerOperationalStatus,
+    ServerProfile,
+    ServerRole,
+)
 from app.schemas.pagination import PageMetadata
 
 
@@ -129,6 +134,8 @@ class ServerRead(BaseModel):
     heartbeat_interval_seconds: int
     last_heartbeat_at: datetime | None
     status: ServerOperationalStatus
+    lifecycle_state: ServerLifecycleState
+    archived_at: datetime | None
     notes: str | None
     enabled: bool
     created_at: datetime
@@ -174,3 +181,39 @@ class ServerPage(PageMetadata):
     """Página de inventario de servidores."""
 
     items: list[ServerListItem]
+
+
+class ServerDeletionRequest(BaseModel):
+    """Confirmación explícita requerida para retirar un servidor."""
+
+    confirmation: str = Field(min_length=1, max_length=200)
+    hostname: str | None = Field(default=None, max_length=255)
+
+
+class ServerRelationSummary(BaseModel):
+    """Relaciones que determinan si el retiro puede ser destructivo."""
+
+    metrics: int = Field(ge=0)
+    alerts: int = Field(ge=0)
+    inventory_snapshots: int = Field(ge=0)
+    onboarding_jobs: int = Field(ge=0)
+    non_cancelled_onboarding_jobs: int = Field(ge=0)
+    onboarding_audit_events: int = Field(ge=0)
+    assigned_channels: int = Field(ge=0)
+    channel_metrics: int = Field(ge=0)
+    category_history: int = Field(ge=0)
+    cost_records: int = Field(ge=0)
+    simulation_records: int = Field(ge=0)
+
+
+class ServerDeletionImpact(BaseModel):
+    server_id: int
+    name: str
+    hostname: str | None
+    relations: ServerRelationSummary
+    can_hard_delete: bool
+
+
+class ServerDeletionResponse(ServerDeletionImpact):
+    action: str
+    cancelled_onboarding_jobs: int = Field(ge=0)

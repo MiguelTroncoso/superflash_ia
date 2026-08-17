@@ -6,7 +6,7 @@ import logging
 import re
 import secrets
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
 
@@ -92,6 +92,7 @@ SAFE_ERRORS: dict[str, str] = {
     "prometheus_not_configured": "Prometheus no está configurado para este servidor.",
     "prometheus_unavailable": "Prometheus no pudo validar el target del servidor.",
     "cancelled": "Onboarding cancelado por el operador.",
+    "job_expired": "El onboarding expiró por falta de actividad y quedó terminalizado.",
     "rollback_failed": "Rollback incompleto; revisar el diagnóstico del servidor.",
     "internal_error": "Onboarding detenido por un error interno seguro.",
     "invalid_private_key": "La clave privada SSH no es válida.",
@@ -113,6 +114,60 @@ class OnboardingService:
     ) -> None:
         self._settings = settings
         self._connection_factory = connection_factory or SSHConnectionService
+
+    def recover_stale(
+        self,
+        session: Session,
+        onboarding: ServerOnboarding,
+        actor: str = "system-recovery",
+    ) -> bool:
+        """Terminaliza jobs abandonados sin tocar el servidor remoto.
+
+        La recuperación se ejecuta al consultar el estado. Solo afecta jobs
+        no terminales cuyo ``updated_at`` supera el timeout configurado; un
+        onboarding reciente sigue siendo reanudable.
+        """
+
+        if onboarding.status in TERMINAL_STATUSES or onboarding.updated_at is None:
+            return False
+        updated_at = onboarding.updated_at
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=UTC)
+        age = datetime.now(UTC) - updated_at
+        if age <= timedelta(seconds=self._settings.onboarding_job_timeout_seconds):
+            return False
+
+        now = datetime.now(UTC)
+        code = "cancelled" if onboarding.cancel_requested else "job_expired"
+        onboarding.status = (
+            OnboardingStatus.CANCELLED.value
+            if code == "cancelled"
+            else OnboardingStatus.FAILED.value
+        )
+        onboarding.failed_at = now
+        onboarding.updated_at = now
+        onboarding.last_error_code = code
+        onboarding.last_error_message_sanitized = SAFE_ERRORS[code]
+        OnboardingRepository(session).add_audit(
+            OnboardingAuditEvent(
+                onboarding_id=onboarding.id,
+                server_id=onboarding.server_id,
+                actor=actor,
+                event="expired" if code == "job_expired" else "cancelled_stale_job",
+                step=onboarding.current_step,
+                success=False,
+                detail_sanitized=SAFE_ERRORS[code],
+                created_at=now,
+            )
+        )
+        session.commit()
+        logger.debug(
+            "onboarding job terminalized id=%s status=%s duration_ms=%s",
+            onboarding.id,
+            onboarding.status,
+            round(age.total_seconds() * 1000, 2),
+        )
+        return True
 
     @staticmethod
     def create_server_and_onboarding(
@@ -1107,6 +1162,12 @@ class OnboardingService:
         actor: str,
         success: bool,
     ) -> None:
+        session.refresh(onboarding)
+        if onboarding.status in TERMINAL_STATUSES:
+            code = onboarding.last_error_code or "job_expired"
+            raise SSHServiceError(code, SAFE_ERRORS.get(code, SAFE_ERRORS["job_expired"]))
+        if onboarding.cancel_requested:
+            raise SSHServiceError("cancelled", SAFE_ERRORS["cancelled"])
         status, progress = STEP_PROGRESS[step]
         if onboarding.started_at is None:
             onboarding.started_at = datetime.now(UTC)
@@ -1152,6 +1213,11 @@ class OnboardingService:
         rollback: bool,
     ) -> None:
         if onboarding is None:
+            return
+        if onboarding.status in TERMINAL_STATUSES and onboarding.last_error_code in {
+            "cancelled",
+            "job_expired",
+        }:
             return
         now = datetime.now(UTC)
         onboarding.status = (

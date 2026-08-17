@@ -16,6 +16,7 @@ from app.schemas.onboarding import (
     MaintenanceAction,
     MaintenanceActionRead,
     MaintenanceRequest,
+    OnboardingActiveRead,
     OnboardingAuditRead,
     OnboardingDiagnosisRead,
     OnboardingDiscoveryRead,
@@ -100,16 +101,38 @@ def test_ssh_connection(
     return OnboardingTestSSHRead.model_validate(OnboardingService(settings).test_ssh(payload))
 
 
+@router.get("/active", response_model=list[OnboardingActiveRead])
+def list_active_onboardings(
+    session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> list[OnboardingActiveRead]:
+    """Lista jobs recientes que el operador puede reanudar, sin secretos."""
+    repository = OnboardingRepository(session)
+    recovery = OnboardingService(settings)
+    for onboarding, _server in repository.active_all():
+        recovery.recover_stale(session, onboarding)
+    return [
+        OnboardingActiveRead(
+            **OnboardingRead.model_validate(onboarding).model_dump(),
+            server_name=server.name,
+            server_hostname=server.hostname,
+        )
+        for onboarding, server in repository.active_all()
+    ]
+
+
 @router.get("/{onboarding_id}", response_model=OnboardingRead)
 def get_onboarding(
     onboarding_id: int,
     session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> OnboardingRead:
     onboarding = OnboardingRepository(session).get(onboarding_id)
     if onboarding is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Onboarding no encontrado"
         )
+    OnboardingService(settings).recover_stale(session, onboarding)
     return OnboardingRead.model_validate(onboarding)
 
 
@@ -145,6 +168,7 @@ def retry_onboarding(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Onboarding no encontrado"
         )
+    OnboardingService(settings).recover_stale(session, onboarding)
     if onboarding.status not in TERMINAL_STATUSES and onboarding.status != "pending":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Onboarding ya está en curso"
@@ -175,6 +199,7 @@ def retry_onboarding(
 def cancel_onboarding(
     onboarding_id: int,
     session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
     operator_id: Annotated[str | None, Header(alias="X-Operator-Id")] = None,
 ) -> OnboardingRead:
     repository = OnboardingRepository(session)
@@ -183,10 +208,11 @@ def cancel_onboarding(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Onboarding no encontrado"
         )
+    OnboardingService(settings).recover_stale(session, onboarding)
     if onboarding.status in TERMINAL_STATUSES:
         return OnboardingRead.model_validate(onboarding)
     onboarding.cancel_requested = True
-    onboarding.status = "cancelled" if onboarding.status == "pending" else onboarding.status
+    onboarding.status = "cancelled"
     onboarding.last_error_code = "cancelled"
     onboarding.last_error_message_sanitized = "Onboarding cancelado por el operador."
     onboarding.updated_at = _now()
@@ -319,6 +345,7 @@ def server_maintenance(
 def get_server_onboarding(
     server_id: int,
     session: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> OnboardingRead:
     if ServerRepository(session).get(server_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Servidor no encontrado")
@@ -327,6 +354,7 @@ def get_server_onboarding(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Onboarding no encontrado"
         )
+    OnboardingService(settings).recover_stale(session, onboarding)
     return OnboardingRead.model_validate(onboarding)
 
 

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -13,6 +13,9 @@ from app.models.server import Server, ServerMetric, ServerOperationalStatus
 from app.repositories.server_repository import ServerRepository
 from app.schemas.server import (
     ServerCreate,
+    ServerDeletionImpact,
+    ServerDeletionRequest,
+    ServerDeletionResponse,
     ServerListItem,
     ServerMetricRead,
     ServerPage,
@@ -88,6 +91,7 @@ def list_servers(
     provider: Annotated[str | None, Query(max_length=120)] = None,
     group: Annotated[str | None, Query(max_length=120)] = None,
     enabled: Annotated[bool | None, Query()] = None,
+    lifecycle_state: Annotated[Literal["active", "archived", "all"], Query()] = "active",
 ) -> ServerPage:
     """Lista servidores paginados con sus agregados operativos."""
     rows, total = ServerRepository(session).list_page(
@@ -98,6 +102,7 @@ def list_servers(
         provider=provider,
         group=group,
         enabled=enabled,
+        lifecycle_state=lifecycle_state,
         sort_by=sort_by,
         sort_order=sort_order,
     )
@@ -136,13 +141,13 @@ def _total_pages(total: int, page_size: int) -> int:
     return (total + page_size - 1) // page_size
 
 
-@router.get("/{server_id}", response_model=ServerRead)
-def get_server(server_id: int, session: Annotated[Session, Depends(get_db)]) -> ServerRead:
-    """Devuelve un servidor por su id interno."""
-    server = ServerRepository(session).get(server_id)
-    if server is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Servidor no encontrado")
-    return _server_response(server)
+def _operator_actor(value: str | None) -> str:
+    clean = "".join(
+        character
+        for character in (value or "api-key-operator")
+        if character.isalnum() or character in "._@-"
+    )
+    return clean[:120] or "api-key-operator"
 
 
 @router.patch("/{server_id}", response_model=ServerRead)
@@ -174,16 +179,101 @@ def update_server(
     return _server_response(server)
 
 
-@router.delete("/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_server(server_id: int, session: Annotated[Session, Depends(get_db)]) -> Response:
-    """Elimina un servidor del inventario y su histórico asociado."""
+@router.get("/{server_id}/deletion-impact", response_model=ServerDeletionImpact)
+def get_server_deletion_impact(
+    server_id: int,
+    session: Annotated[Session, Depends(get_db)],
+) -> ServerDeletionImpact:
+    """Muestra el impacto del retiro sin exponer datos sensibles."""
     repository = ServerRepository(session)
     server = repository.get(server_id)
     if server is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Servidor no encontrado")
-    repository.delete(server)
+    relations = repository.relation_summary(server)
+    return ServerDeletionImpact(
+        server_id=server.id,
+        name=server.name,
+        hostname=server.hostname,
+        relations=relations,
+        can_hard_delete=repository.can_hard_delete(relations),
+    )
+
+
+@router.get("/{server_id}", response_model=ServerRead)
+def get_server(server_id: int, session: Annotated[Session, Depends(get_db)]) -> ServerRead:
+    """Devuelve un servidor por su id interno."""
+    server = ServerRepository(session).get(server_id)
+    if server is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Servidor no encontrado")
+    return _server_response(server)
+
+
+@router.delete("/{server_id}", response_model=ServerDeletionResponse)
+def delete_server(
+    server_id: int,
+    payload: ServerDeletionRequest,
+    session: Annotated[Session, Depends(get_db)],
+    operator_id: Annotated[str | None, Header(alias="X-Operator-Id")] = None,
+) -> ServerDeletionResponse:
+    """Retira un servidor con confirmación explícita y sin borrar histórico productivo.
+
+    Un registro sin métricas, alertas, snapshots, canales, costes ni jobs no
+    cancelados puede eliminarse por completo. En cualquier otro caso solo se
+    archiva y conserva su histórico. No existe un purge público.
+    """
+    repository = ServerRepository(session)
+    server = repository.get(server_id)
+    if server is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Servidor no encontrado")
+    if payload.confirmation != server.name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La confirmación debe coincidir exactamente con el nombre del servidor",
+        )
+    if server.hostname is not None and payload.hostname != server.hostname:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La confirmación de host no coincide con el servidor",
+        )
+
+    relations = repository.relation_summary(server)
+    cancelled_jobs = 0
+    if server.lifecycle_state != "archived":
+        cancelled_jobs = repository.cancel_active_onboardings(
+            server.id,
+            _operator_actor(operator_id),
+        )
+        relations = repository.relation_summary(server)
+
+    # A running background worker needs the cancelled row to remain visible
+    # until the operator performs a later explicit cleanup. This prevents a
+    # concurrent worker from losing the cancellation marker after a cascade.
+    if cancelled_jobs == 0 and repository.can_hard_delete(relations):
+        name = server.name
+        hostname = server.hostname
+        repository.delete(server)
+        session.commit()
+        return ServerDeletionResponse(
+            server_id=server_id,
+            name=name,
+            hostname=hostname,
+            relations=relations,
+            can_hard_delete=True,
+            action="deleted",
+            cancelled_onboarding_jobs=cancelled_jobs,
+        )
+
+    repository.archive(server)
     session.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return ServerDeletionResponse(
+        server_id=server.id,
+        name=server.name,
+        hostname=server.hostname,
+        relations=relations,
+        can_hard_delete=False,
+        action="archived",
+        cancelled_onboarding_jobs=cancelled_jobs,
+    )
 
 
 @router.get("/{server_id}/metrics", response_model=list[ServerMetricRead])

@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     ssh_connect_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     ssh_command_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     ssh_retry_count: int = Field(default=2, ge=0, le=5)
+    onboarding_job_timeout_seconds: int = Field(default=900, ge=60, le=86_400)
     onboarding_monitor_ip: str = "178.104.98.19"
     node_exporter_version: str | None = None
     node_exporter_primary_base_url: str = (
